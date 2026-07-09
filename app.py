@@ -379,32 +379,84 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0):
-    high, low, close = df["High"], df["Low"], df["Close"]
-    atr_series = atr(high, low, close, period)
+    """Robust Supertrend implementation.
+
+    Critical fix versus the previous version:
+    - final upper/lower bands are explicitly initialized at the first valid ATR row.
+    - trend can flip both ways after initialization.
+    - the line does not remain NaN after the warm-up window.
+
+    trend = 1 means bullish; trend = -1 means bearish; trend = 0 means warm-up.
+    """
+    if df is None or df.empty:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+
+    high = df["High"].astype(float)
+    low = df["Low"].astype(float)
+    close = df["Close"].astype(float)
+
     if TALIB_AVAILABLE:
-        atr_series = pd.Series(ta.ATR(high.values, low.values, close.values, timeperiod=period), index=df.index)
+        atr_series = pd.Series(
+            ta.ATR(high.values, low.values, close.values, timeperiod=period),
+            index=df.index,
+            dtype=float,
+        )
+    else:
+        atr_series = atr(high, low, close, period)
+
     hl2 = (high + low) / 2.0
     basic_ub = hl2 + multiplier * atr_series
     basic_lb = hl2 - multiplier * atr_series
-    final_ub = basic_ub.copy()
-    final_lb = basic_lb.copy()
-    trend = pd.Series(0, index=df.index, dtype=float)
+
+    final_ub = pd.Series(np.nan, index=df.index, dtype=float)
+    final_lb = pd.Series(np.nan, index=df.index, dtype=float)
+    trend = pd.Series(0, index=df.index, dtype=int)
     st_line = pd.Series(np.nan, index=df.index, dtype=float)
 
-    for i in range(1, len(df)):
-        if np.isnan(basic_ub.iloc[i]) or np.isnan(basic_lb.iloc[i]):
+    first_valid = atr_series.first_valid_index()
+    if first_valid is None:
+        return st_line, trend
+
+    start_pos = df.index.get_loc(first_valid)
+
+    for i in range(start_pos, len(df)):
+        if pd.isna(basic_ub.iloc[i]) or pd.isna(basic_lb.iloc[i]):
             continue
-        final_ub.iloc[i] = basic_ub.iloc[i] if (basic_ub.iloc[i] < final_ub.iloc[i - 1] or close.iloc[i - 1] > final_ub.iloc[i - 1]) else final_ub.iloc[i - 1]
-        final_lb.iloc[i] = basic_lb.iloc[i] if (basic_lb.iloc[i] > final_lb.iloc[i - 1] or close.iloc[i - 1] < final_lb.iloc[i - 1]) else final_lb.iloc[i - 1]
-        prev_trend = trend.iloc[i - 1] if trend.iloc[i - 1] != 0 else 1
+
+        if i == start_pos or pd.isna(final_ub.iloc[i - 1]) or pd.isna(final_lb.iloc[i - 1]):
+            final_ub.iloc[i] = basic_ub.iloc[i]
+            final_lb.iloc[i] = basic_lb.iloc[i]
+            trend.iloc[i] = 1
+            st_line.iloc[i] = final_lb.iloc[i]
+            continue
+
+        prev_final_ub = final_ub.iloc[i - 1]
+        prev_final_lb = final_lb.iloc[i - 1]
+        prev_close = close.iloc[i - 1]
+
+        if (basic_ub.iloc[i] < prev_final_ub) or (prev_close > prev_final_ub):
+            final_ub.iloc[i] = basic_ub.iloc[i]
+        else:
+            final_ub.iloc[i] = prev_final_ub
+
+        if (basic_lb.iloc[i] > prev_final_lb) or (prev_close < prev_final_lb):
+            final_lb.iloc[i] = basic_lb.iloc[i]
+        else:
+            final_lb.iloc[i] = prev_final_lb
+
+        prev_trend = trend.iloc[i - 1] if trend.iloc[i - 1] in (1, -1) else 1
+
         if prev_trend == 1 and close.iloc[i] < final_lb.iloc[i]:
             trend.iloc[i] = -1
         elif prev_trend == -1 and close.iloc[i] > final_ub.iloc[i]:
             trend.iloc[i] = 1
         else:
             trend.iloc[i] = prev_trend
+
         st_line.iloc[i] = final_lb.iloc[i] if trend.iloc[i] == 1 else final_ub.iloc[i]
+
     return st_line, trend
+
 
 # -------------------------------------------------------------------------
 # RISK METRICS
@@ -541,6 +593,11 @@ def compute_stats(df: pd.DataFrame, trades: list, index_returns: Optional[pd.Ser
         "down_capture_pct": down_capture,
         "directional_match_pct": directional,
         "corr_bh": df["BH_Equity"].corr(df["Strategy_Equity"]),
+        "exposure_pct": float(df.get("Position", pd.Series(0, index=df.index)).mean() * 100) if len(df) else np.nan,
+        "buy_signal_count": int((df.get("Signal", pd.Series(0, index=df.index)) == 1).sum()),
+        "sell_signal_count": int((df.get("Signal", pd.Series(0, index=df.index)) == -1).sum()),
+        "entry_eligible_days": int(df.get("Entry_Eligible", pd.Series(False, index=df.index)).sum()) if len(df) else 0,
+        "active_position_now": bool(df.get("Position", pd.Series(0, index=df.index)).iloc[-1] == 1) if len(df) else False,
     }
     stats.update(trade_stats)
     return trades_df, stats
@@ -598,13 +655,18 @@ def backtest_macd_atr_trailing(
 
     bull_cross = (df["MACD"] > df["MACD_SIGNAL"]) & (df["MACD"].shift(1) <= df["MACD_SIGNAL"].shift(1))
     bear_cross = (df["MACD"] < df["MACD_SIGNAL"]) & (df["MACD"].shift(1) >= df["MACD_SIGNAL"].shift(1))
-    entry_long = bull_cross.fillna(False)
+
+    # FIX: do not require a fresh crossover after the selected backtest start date.
+    # If the backtest starts while MACD is already bullish, the strategy may enter.
+    # Otherwise many valid histories appear as if the strategy never worked.
+    entry_state = (df["MACD"] > df["MACD_SIGNAL"]).fillna(False)
     if use_ema_filter:
-        entry_long &= df["Close"] > df["EMA_200"]
+        entry_state &= (df["Close"] > df["EMA_200"]).fillna(False)
     if use_adx_filter:
-        entry_long &= df["ADX"] > adx_threshold
+        entry_state &= (df["ADX"] > adx_threshold).fillna(False)
     if market_filter is not None:
-        entry_long &= market_filter.reindex(df.index).ffill().fillna(False)
+        entry_state &= market_filter.reindex(df.index).ffill().fillna(False)
+    entry_long = entry_state
 
     exit_rule = pd.Series(False, index=df.index)
     if use_macd_exit:
@@ -635,18 +697,29 @@ def backtest_supertrend_trailing(
     if df.empty:
         return df, pd.DataFrame(), {}
     df["ST_Dir_prev"] = df["ST_Dir"].shift(1).fillna(0)
-    entry_long = (df["ST_Dir"] == 1) & (df["ST_Dir_prev"] != 1)
+
+    # FIX: state-based entry instead of flip-only entry.
+    # The previous version waited only for ST_Dir to flip from non-bullish to bullish.
+    # If the chosen start date occurred during an already bullish regime, Strategy_Return
+    # stayed flat and the Backtest & Risk tab looked broken.
+    entry_state = (df["ST_Dir"] == 1).fillna(False)
     if use_ema_filter:
-        entry_long &= df["Close"] > df["EMA_200"]
+        entry_state &= (df["Close"] > df["EMA_200"]).fillna(False)
     if use_adx_filter:
-        entry_long &= df["ADX"] > adx_threshold
+        entry_state &= (df["ADX"] > adx_threshold).fillna(False)
     if market_filter is not None:
-        entry_long &= market_filter.reindex(df.index).ffill().fillna(False)
+        entry_state &= market_filter.reindex(df.index).ffill().fillna(False)
+    entry_long = entry_state
+
     exit_rule = ((df["ST_Dir"] == -1) & (df["ST_Dir_prev"] == 1)).fillna(False)
     return _run_trailing_backtest(df, entry_long.fillna(False), exit_rule, atr_mult_stop, "SUPERTREND_FLIP", index_returns)
 
 
 def _run_trailing_backtest(df: pd.DataFrame, entry_long: pd.Series, exit_rule: pd.Series, atr_mult_stop: float, exit_label: str, index_returns: Optional[pd.Series]):
+    df = df.copy()
+    entry_long = pd.Series(entry_long, index=df.index).reindex(df.index).fillna(False).astype(bool)
+    exit_rule = pd.Series(exit_rule, index=df.index).reindex(df.index).fillna(False).astype(bool)
+
     position = 0
     signals, positions, atr_stops = [], [], []
     entry_price = None
@@ -708,6 +781,9 @@ def _run_trailing_backtest(df: pd.DataFrame, entry_long: pd.Series, exit_rule: p
     df["Signal"] = signals
     df["Position"] = positions
     df["ATR_Stop"] = atr_stops
+    df["Entry_Eligible"] = entry_long
+    df["Exit_Rule"] = exit_rule
+    df["Days_In_Market"] = df["Position"].expanding().sum()
     df["Return"] = df["Close"].pct_change().fillna(0.0)
     df["Strategy_Return"] = df["Position"].shift(1).fillna(0) * df["Return"]
     df["BH_Equity"] = (1 + df["Return"]).cumprod()
@@ -993,7 +1069,7 @@ start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("today") + pd.Timedelta(days=1))
 
 st.sidebar.markdown("---")
-use_index_filter_global = st.sidebar.checkbox("Use BIST 100 Regime Filter (XU100 > EMA200)", value=True)
+use_index_filter_global = st.sidebar.checkbox("Use BIST 100 Regime Filter (XU100 > EMA200)", value=False)
 strategy_choice = st.sidebar.radio("Select Strategy Variant:", ["MACD + ATR Trailing", "Smart Supertrend", "Smart Supertrend + Optimizer"], index=1)
 
 if strategy_choice.startswith("MACD"):
@@ -1012,9 +1088,9 @@ else:
     st.sidebar.subheader("Smart Supertrend Parameters")
     st_period = st.sidebar.slider("Supertrend Period", 7, 50, 10)
     st_mult = st.sidebar.slider("Supertrend Multiplier", 1.0, 6.0, 2.5, 0.5)
-    use_adx_filter = st.sidebar.checkbox("Use ADX Filter", True)
+    use_adx_filter = st.sidebar.checkbox("Use ADX Filter", False)
     adx_threshold = st.sidebar.slider("ADX Threshold", 5, 40, 10)
-    use_ema_filter = st.sidebar.checkbox("Use EMA200 Filter (Entry)", True)
+    use_ema_filter = st.sidebar.checkbox("Use EMA200 Filter (Entry)", False)
     atr_mult_stop_st = st.sidebar.slider("ATR Trailing Stop Multiplier", 0.5, 6.0, 2.0, 0.5)
 
 # -------------------------------------------------------------------------
@@ -1110,7 +1186,7 @@ with tab1:
 # -------------------------------------------------------------------------
 with tab2:
     st.subheader("Smart Data Table — OHLCV, Signals, Risk & Rolling Beta")
-    cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "Signal", "Position", "ATR_Stop", "Return", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
+    cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
     show = plot_data[[c for c in cols if c in plot_data.columns]].sort_index(ascending=False).copy()
     st.dataframe(style_smart_table(show.head(800)), use_container_width=True, height=620)
     csv = show.to_csv(index=True).encode("utf-8")
@@ -1153,7 +1229,18 @@ with tab4:
     c5.metric("VaR 95% / CVaR 95%", f"{stats.get('var95_pct', np.nan):.2f}% / {stats.get('cvar95_pct', np.nan):.2f}%")
     c6.metric("VaR 99% / CVaR 99%", f"{stats.get('var99_pct', np.nan):.2f}% / {stats.get('cvar99_pct', np.nan):.2f}%")
     c7.metric("Up / Down Capture", f"{stats.get('up_capture_pct', np.nan):.1f}% / {stats.get('down_capture_pct', np.nan):.1f}%")
-    c8.metric("Win Rate / Trades", f"{stats.get('win_rate', np.nan):.1f}% / {stats.get('trade_count', 0)}")
+    c8.metric("Win Rate / Closed Trades", f"{stats.get('win_rate', np.nan):.1f}% / {stats.get('trade_count', 0)}")
+
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Exposure", f"{stats.get('exposure_pct', np.nan):.1f}%")
+    d2.metric("Buy / Sell Signals", f"{stats.get('buy_signal_count', 0)} / {stats.get('sell_signal_count', 0)}")
+    d3.metric("Entry-Eligible Days", f"{stats.get('entry_eligible_days', 0)}")
+    d4.metric("Open Position Now", "YES" if stats.get('active_position_now', False) else "NO")
+
+    if stats.get('buy_signal_count', 0) == 0 and stats.get('entry_eligible_days', 0) == 0:
+        st.warning("Strategy produced no eligible entry days under the current filters. Try disabling EMA200, ADX, or BIST100 regime filter, or use a longer backtest window.")
+    elif stats.get('trade_count', 0) == 0 and stats.get('active_position_now', False):
+        st.info("The strategy is active but has not closed a trade yet in the selected window. Closed-trade statistics will remain zero until an exit occurs.")
 
     st.plotly_chart(equity_risk_chart(plot_data), use_container_width=True, theme=None)
 
