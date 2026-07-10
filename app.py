@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # -------------------------------------------------------------------------
-# SUPERTRENDPRO INSTITUTIONAL V5.0.1 – NO SYNTHETIC DATA + LEADING SIGNAL LAB
+# SUPERTRENDPRO INSTITUTIONAL V5.0.2 – NO SYNTHETIC DATA + LEADING SIGNAL LAB
 # Trend Following + Smart Supertrend + Beta + Risk Metrics
 # Expanded BIST Blue-Chip Universe + Capital Gain Leaders Lab
 # -------------------------------------------------------------------------
@@ -27,34 +27,36 @@ from plotly.subplots import make_subplots
 import itertools
 
 # -------------------------------------------------------------------------
-# OPTIONAL TA-LIB: the app runs even if TA-Lib is not installed.
-# No synthetic prices are ever generated; only indicator formulas fall back.
+# INDICATOR ENGINE: TA-Lib is automatically preferred when installed.
+# The user can explicitly select Auto, TA-Lib, or Pandas/NumPy in the sidebar.
+# No synthetic prices are ever generated; only indicator formulas can fall back.
 # -------------------------------------------------------------------------
-# TA-Lib is opt-in because native TA-Lib wheels can cause segmentation faults
-# on some Streamlit Cloud images. Internal pandas/numpy formulas are the default.
-ENABLE_TALIB = os.getenv("SUPERTRENDPRO_ENABLE_TALIB", "0") == "1"
-if ENABLE_TALIB:
-    try:
-        import talib as ta
-        TALIB_AVAILABLE = True
-    except Exception:
-        ta = None
-        TALIB_AVAILABLE = False
-else:
+try:
+    import talib as ta
+    TALIB_INSTALLED = True
+    TALIB_VERSION = getattr(ta, "__version__", "installed")
+    TALIB_IMPORT_ERROR = ""
+except Exception as exc:
     ta = None
-    TALIB_AVAILABLE = False
+    TALIB_INSTALLED = False
+    TALIB_VERSION = "not installed"
+    TALIB_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+
+# This runtime flag is resolved from the sidebar before any market data is processed.
+TALIB_AVAILABLE = False
+ACTIVE_INDICATOR_ENGINE = "Pandas / NumPy"
 
 TRADING_DAYS = 252
 ROLLING_BETA_WINDOW = 60
 ROLLING_VOL_WINDOW = 63
 MIN_PRICE_OBS = 120
 BENCHMARK_SYMBOL = "XU100.IS"
-APP_VERSION = "4.1"
-APP_RELEASE_NAME = "SupertrendPro Institutional V5.0.1"
+APP_VERSION = "5.0.2"
+APP_RELEASE_NAME = "SupertrendPro Institutional V5.0.2"
 
 st.set_page_config(
     layout="wide",
-    page_title="SupertrendPro Institutional V5.0.1",
+    page_title="SupertrendPro Institutional V5.0.2",
     initial_sidebar_state="expanded",
 )
 
@@ -1234,7 +1236,7 @@ def leading_signal_chart(df: pd.DataFrame, title: str) -> go.Figure:
 
 
 # -------------------------------------------------------------------------
-# INSTITUTIONAL LEADING SIGNAL ENGINE V5.0.1
+# INSTITUTIONAL LEADING SIGNAL ENGINE V5.0.2
 # -------------------------------------------------------------------------
 def _safe_percentile_rank(series: pd.Series, window: int = 252) -> pd.Series:
     s = pd.Series(series, dtype=float)
@@ -1432,7 +1434,7 @@ def institutional_score_chart(score_df: pd.DataFrame) -> go.Figure:
 # -------------------------------------------------------------------------
 # SIDEBAR
 # -------------------------------------------------------------------------
-st.sidebar.title("📊 SupertrendPro V5.0.1")
+st.sidebar.title("📊 SupertrendPro V5.0.2")
 st.sidebar.caption("Real Yahoo Finance daily data only. No synthetic price series, no proxy fallback.")
 
 selected_category = st.sidebar.selectbox("Select Sector / Category:", list(MARKET_DATA.keys()), index=2)
@@ -1443,6 +1445,35 @@ ticker_symbol = ticker_options[selected_asset_name]
 st.sidebar.markdown("---")
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("today") + pd.Timedelta(days=1))
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Indicator Engine")
+_indicator_options = ["Auto — Prefer TA-Lib", "TA-Lib", "Pandas / NumPy"]
+_indicator_default = 0
+indicator_engine_mode = st.sidebar.selectbox(
+    "Calculation Engine",
+    options=_indicator_options,
+    index=_indicator_default,
+    help=(
+        "Auto uses TA-Lib when the package is installed and falls back to the internal "
+        "Pandas/NumPy formulas only when TA-Lib cannot be imported."
+    ),
+)
+
+if indicator_engine_mode == "Pandas / NumPy":
+    TALIB_AVAILABLE = False
+    ACTIVE_INDICATOR_ENGINE = "Pandas / NumPy"
+elif indicator_engine_mode == "TA-Lib":
+    TALIB_AVAILABLE = bool(TALIB_INSTALLED)
+    ACTIVE_INDICATOR_ENGINE = "TA-Lib" if TALIB_AVAILABLE else "Pandas / NumPy fallback"
+else:
+    TALIB_AVAILABLE = bool(TALIB_INSTALLED)
+    ACTIVE_INDICATOR_ENGINE = "TA-Lib" if TALIB_AVAILABLE else "Pandas / NumPy fallback"
+
+st.sidebar.caption(
+    f"Active engine: {ACTIVE_INDICATOR_ENGINE}"
+    + (f" · TA-Lib {TALIB_VERSION}" if TALIB_AVAILABLE else "")
+)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Execution Assumptions")
@@ -1477,11 +1508,29 @@ else:
 # -------------------------------------------------------------------------
 # MAIN DATA LOAD
 # -------------------------------------------------------------------------
-st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V5.0.1 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V5.0.2 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
 st.caption("MK FinTECH LabGEN @2026 Istanbul | No synthetic data | Yahoo Finance daily OHLCV | Net-of-cost backtests | Educational analytics, not investment advice")
 
-if not TALIB_AVAILABLE:
-    st.info("TA-Lib is not installed. The app is using internal pandas/numpy indicator formulas. Price data still comes only from Yahoo Finance.")
+engine_col1, engine_col2, engine_col3 = st.columns(3)
+engine_col1.metric("Market Data Engine", "Yahoo Finance")
+engine_col2.metric("Indicator Engine", ACTIVE_INDICATOR_ENGINE)
+engine_col3.metric("TA-Lib Version", TALIB_VERSION if TALIB_INSTALLED else "Unavailable")
+
+if indicator_engine_mode == "TA-Lib" and not TALIB_INSTALLED:
+    st.warning(
+        "TA-Lib was explicitly selected but could not be imported. "
+        "The app has switched to its internal Pandas/NumPy indicator formulas. "
+        f"Import detail: {TALIB_IMPORT_ERROR or 'unknown error'}"
+    )
+elif indicator_engine_mode.startswith("Auto") and TALIB_INSTALLED:
+    st.success(f"TA-Lib {TALIB_VERSION} is active for supported indicators. Pandas/NumPy remains available as a fallback.")
+elif indicator_engine_mode.startswith("Auto") and not TALIB_INSTALLED:
+    st.info(
+        "TA-Lib is not available in this deployment, so Auto mode selected the internal "
+        "Pandas/NumPy engine. Add TA-Lib to requirements.txt and reboot the app to activate it."
+    )
+else:
+    st.info("Pandas/NumPy indicator calculations were selected manually. Price data still comes only from Yahoo Finance.")
 
 with st.spinner("Fetching XU100 benchmark for regime filter and beta calculations..."):
     idx_raw = get_data(BENCHMARK_SYMBOL, start_date, end_date)
@@ -1538,8 +1587,8 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
-st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V5.0.1")
-st.caption("Institutional V5.0.1 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
+st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V5.0.2")
+st.caption("Institutional V5.0.2 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
 st.caption("Cloud-stable build: Arrow-safe tables, modern Streamlit width API, TA-Lib disabled by default.")
 
 # Top KPIs
