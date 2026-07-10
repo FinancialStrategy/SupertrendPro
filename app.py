@@ -1438,25 +1438,171 @@ def build_institutional_signal_engine(
 def institutional_score_chart(score_df: pd.DataFrame) -> go.Figure:
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-        row_heights=[0.42, 0.30, 0.28],
-        subplot_titles=('Adjusted Price', 'Institutional Score and Confidence', 'Factor Contribution History'),
+        row_heights=[0.46, 0.26, 0.28],
+        specs=[[{'secondary_y': True}], [{'secondary_y': False}], [{'secondary_y': False}]],
+        subplot_titles=(
+            'Adjusted Price Structure — Candles, Trend Averages, Bollinger Envelope & Volume',
+            'Institutional Score and Confidence',
+            'Factor Contribution History',
+        ),
     )
-    fig.add_trace(go.Scatter(x=score_df.index, y=score_df['Close'], mode='lines', name='Adjusted Close'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=score_df.index, y=score_df['Institutional Score'], mode='lines', name='Institutional Score'), row=2, col=1)
-    fig.add_trace(go.Scatter(x=score_df.index, y=score_df['Confidence Score'], mode='lines', name='Confidence'), row=2, col=1)
+
+    # --- Row 1: professional adjusted-price panel ---
+    volume_colors = np.where(score_df['Close'] >= score_df['Open'], '#16a34a', '#dc2626')
+    fig.add_trace(
+        go.Candlestick(
+            x=score_df.index,
+            open=score_df['Open'],
+            high=score_df['High'],
+            low=score_df['Low'],
+            close=score_df['Close'],
+            name='Adjusted OHLC',
+            increasing_line_color='#16a34a',
+            decreasing_line_color='#dc2626',
+            increasing_fillcolor='rgba(22,163,74,0.75)',
+            decreasing_fillcolor='rgba(220,38,38,0.75)',
+            whiskerwidth=0.4,
+            opacity=0.95,
+        ),
+        row=1, col=1, secondary_y=False
+    )
+
+    if 'BB_UPPER' in score_df.columns and 'BB_LOWER' in score_df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=score_df.index, y=score_df['BB_UPPER'], mode='lines',
+                line=dict(width=1.0, dash='dot', color='rgba(59,130,246,0.55)'),
+                name='BB Upper', showlegend=True
+            ),
+            row=1, col=1, secondary_y=False
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=score_df.index, y=score_df['BB_LOWER'], mode='lines',
+                line=dict(width=1.0, dash='dot', color='rgba(59,130,246,0.55)'),
+                fill='tonexty', fillcolor='rgba(59,130,246,0.08)',
+                name='Bollinger Envelope', showlegend=True
+            ),
+            row=1, col=1, secondary_y=False
+        )
+
+    ema_specs = [
+        ('EMA_20', 'EMA 20', '#2563eb', 1.4, 'solid'),
+        ('EMA_50', 'EMA 50', '#f59e0b', 1.6, 'solid'),
+        ('EMA_200', 'EMA 200', '#111827', 1.8, 'dash'),
+    ]
+    for col, name, color, width, dash in ema_specs:
+        if col in score_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=score_df.index, y=score_df[col], mode='lines', name=name,
+                    line=dict(color=color, width=width, dash=dash),
+                ),
+                row=1, col=1, secondary_y=False
+            )
+
+    # Highlight latest regime state on price panel
+    if len(score_df):
+        latest = score_df.iloc[-1]
+        regime_color_map = {
+            'STRONG BUY': '#16a34a',
+            'BUY': '#84cc16',
+            'HOLD': '#f59e0b',
+            'SELL': '#f97316',
+            'STRONG SELL': '#dc2626',
+        }
+        regime = str(latest.get('Recommendation', 'HOLD'))
+        regime_color = regime_color_map.get(regime, '#64748b')
+        fig.add_trace(
+            go.Scatter(
+                x=[score_df.index[-1]], y=[latest['Close']], mode='markers',
+                name=f'Latest Regime: {regime}',
+                marker=dict(size=12, color=regime_color, line=dict(width=1.2, color='white')),
+                hovertemplate='Date=%{x}<br>Adjusted Close=%{y:.2f}<br>Recommendation=' + regime + '<extra></extra>',
+            ),
+            row=1, col=1, secondary_y=False
+        )
+
+    # Volume on secondary axis
+    fig.add_trace(
+        go.Bar(
+            x=score_df.index, y=score_df['Volume'], name='Volume', opacity=0.22,
+            marker_color=volume_colors,
+            hovertemplate='Date=%{x}<br>Volume=%{y:,.0f}<extra></extra>',
+        ),
+        row=1, col=1, secondary_y=True
+    )
+
+    # --- Row 2: score / confidence panel ---
+    fig.add_trace(
+        go.Scatter(
+            x=score_df.index, y=score_df['Institutional Score'], mode='lines', name='Institutional Score',
+            line=dict(color='#111827', width=2.4),
+            fill='tozeroy', fillcolor='rgba(17,24,39,0.08)'
+        ),
+        row=2, col=1
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=score_df.index, y=score_df['Confidence Score'], mode='lines', name='Confidence Score',
+            line=dict(color='#7c3aed', width=2.0, dash='dot')
+        ),
+        row=2, col=1
+    )
+    score_bands = [
+        (0, 25, 'rgba(220,38,38,0.08)'),
+        (25, 40, 'rgba(249,115,22,0.08)'),
+        (40, 60, 'rgba(245,158,11,0.08)'),
+        (60, 75, 'rgba(132,204,22,0.08)'),
+        (75, 100, 'rgba(22,163,74,0.08)'),
+    ]
+    for y0, y1, color in score_bands:
+        fig.add_hrect(y0=y0, y1=y1, fillcolor=color, line_width=0, row=2, col=1)
     for y in (25, 40, 60, 75):
-        fig.add_hline(y=y, line_dash='dot', line_width=1, row=2, col=1)
+        fig.add_hline(y=y, line_dash='dot', line_width=1, line_color='rgba(100,116,139,0.7)', row=2, col=1)
+
+    # --- Row 3: factor history ---
     factor_cols = ['Trend Score','Momentum Score','Relative Strength Score','Volume Score','Volatility Score','Risk Score','Market Regime Score']
+    factor_color_map = {
+        'Trend Score': '#2563eb',
+        'Momentum Score': '#7c3aed',
+        'Relative Strength Score': '#14b8a6',
+        'Volume Score': '#f59e0b',
+        'Volatility Score': '#ef4444',
+        'Risk Score': '#64748b',
+        'Market Regime Score': '#16a34a',
+    }
     for col in factor_cols:
-        fig.add_trace(go.Scatter(x=score_df.index, y=score_df[col], mode='lines', stackgroup='one', name=col.replace(' Score','')), row=3, col=1)
-    fig.update_layout(height=920, template='plotly_white', hovermode='x unified', margin=dict(l=20,r=20,t=60,b=20))
-    fig.update_yaxes(range=[0,100], row=2, col=1)
+        if col in score_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=score_df.index, y=score_df[col], mode='lines', stackgroup='one', name=col.replace(' Score',''),
+                    line=dict(width=0.9, color=factor_color_map.get(col)),
+                    hovertemplate='Date=%{x}<br>' + col.replace(' Score','') + '=%{y:.2f}<extra></extra>'
+                ),
+                row=3, col=1
+            )
+
+    fig.update_layout(
+        height=1040,
+        template='plotly_white',
+        hovermode='x unified',
+        margin=dict(l=20, r=20, t=70, b=20),
+        legend=dict(orientation='h', yanchor='bottom', y=1.01, xanchor='right', x=1.0),
+        xaxis_rangeslider_visible=False,
+        bargap=0.0,
+    )
+    fig.update_xaxes(showgrid=True, gridcolor='#eef2f6')
+    fig.update_yaxes(showgrid=True, gridcolor='#eef2f6', title_text='Adjusted Price', row=1, col=1, secondary_y=False)
+    fig.update_yaxes(showgrid=False, title_text='Volume', row=1, col=1, secondary_y=True)
+    fig.update_yaxes(range=[0, 100], title_text='Score', row=2, col=1)
+    fig.update_yaxes(title_text='Points', row=3, col=1)
     return fig
 
 # -------------------------------------------------------------------------
 # SIDEBAR
 # -------------------------------------------------------------------------
-st.sidebar.title("📊 SupertrendPro V5.0.2 HF1")
+st.sidebar.title("📊 SupertrendPro V5.0.2 HF2")
 st.sidebar.caption("Real Yahoo Finance daily data only. No synthetic price series, no proxy fallback.")
 
 selected_category = st.sidebar.selectbox("Select Sector / Category:", list(MARKET_DATA.keys()), index=2)
@@ -1609,7 +1755,7 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
-st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V5.0.2 HF1")
+st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V5.0.2 HF2")
 st.caption("Institutional V5.0.2 HF1 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
 st.caption("Cloud-stable build: Arrow-safe tables, modern Streamlit width API, TA-Lib disabled by default.")
 
