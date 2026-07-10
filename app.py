@@ -1436,162 +1436,217 @@ def build_institutional_signal_engine(
     return x, contribution, summary
 
 def institutional_score_chart(score_df: pd.DataFrame) -> go.Figure:
+    score_df = score_df.copy().sort_index()
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-        row_heights=[0.46, 0.26, 0.28],
+        row_heights=[0.50, 0.22, 0.28],
         specs=[[{'secondary_y': True}], [{'secondary_y': False}], [{'secondary_y': False}]],
         subplot_titles=(
-            'Adjusted Price Structure — Candles, Trend Averages, Bollinger Envelope & Volume',
+            'Adjusted Price Structure — Candles, Trend Channel, Anchored VWAP, Swing Structure, Targets & Volume',
             'Institutional Score and Confidence',
             'Factor Contribution History',
         ),
     )
 
-    # --- Row 1: professional adjusted-price panel ---
+    regime_color_map = {
+        'STRONG BUY': 'rgba(22,163,74,0.10)',
+        'BUY': 'rgba(132,204,22,0.08)',
+        'HOLD': 'rgba(245,158,11,0.07)',
+        'SELL': 'rgba(249,115,22,0.08)',
+        'STRONG SELL': 'rgba(220,38,38,0.10)',
+    }
+    regime_marker_map = {
+        'STRONG BUY': '#16a34a',
+        'BUY': '#84cc16',
+        'HOLD': '#f59e0b',
+        'SELL': '#f97316',
+        'STRONG SELL': '#dc2626',
+    }
+
+    # --- derived price-structure helpers ---
+    resistance_20 = score_df['High'].rolling(20, min_periods=10).max()
+    support_20 = score_df['Low'].rolling(20, min_periods=10).min()
+    resistance_60 = score_df['High'].rolling(60, min_periods=30).max()
+    support_60 = score_df['Low'].rolling(60, min_periods=30).min()
     volume_colors = np.where(score_df['Close'] >= score_df['Open'], '#16a34a', '#dc2626')
+    regime = score_df['Recommendation'].fillna('HOLD').astype(str) if 'Recommendation' in score_df.columns else pd.Series('HOLD', index=score_df.index)
+
+    # --- dynamic trend channel (recent regression channel) ---
+    channel_lookback = int(min(90, max(40, len(score_df))))
+    trend_mid = pd.Series(np.nan, index=score_df.index, dtype=float)
+    trend_upper = pd.Series(np.nan, index=score_df.index, dtype=float)
+    trend_lower = pd.Series(np.nan, index=score_df.index, dtype=float)
+    channel_slice = score_df.iloc[-channel_lookback:].copy()
+    if len(channel_slice) >= 20:
+        x_idx = np.arange(len(channel_slice), dtype=float)
+        slope, intercept = np.polyfit(x_idx, channel_slice['Close'].astype(float).values, 1)
+        fitted = intercept + slope * x_idx
+        resid_std = float(np.nanstd(channel_slice['Close'].astype(float).values - fitted, ddof=1)) if len(channel_slice) > 2 else 0.0
+        atr_pad = float(channel_slice['ATR'].tail(20).median()) if 'ATR' in channel_slice.columns and channel_slice['ATR'].notna().any() else 0.0
+        channel_width = max(resid_std * 1.40, atr_pad * 1.20, 1e-9)
+        trend_mid.loc[channel_slice.index] = fitted
+        trend_upper.loc[channel_slice.index] = fitted + channel_width
+        trend_lower.loc[channel_slice.index] = fitted - channel_width
+    else:
+        channel_width = np.nan
+
+    # --- anchored VWAP anchored to latest swing low or fallback recent support ---
+    low = score_df['Low'].astype(float)
+    high = score_df['High'].astype(float)
+    close = score_df['Close'].astype(float)
+    volume = score_df['Volume'].astype(float)
+    typical_price = (high + low + close) / 3.0
+    swing_low_mask = (low.shift(2) > low.shift(1)) & (low.shift(1) > low) & (low.shift(-1) > low) & (low.shift(-2) > low)
+    swing_high_mask = (high.shift(2) < high.shift(1)) & (high.shift(1) < high) & (high.shift(-1) < high) & (high.shift(-2) < high)
+    recent_window = min(150, len(score_df))
+    recent_index = score_df.index[-recent_window:]
+    recent_swing_lows = score_df.index[swing_low_mask.fillna(False) & score_df.index.isin(recent_index)]
+    recent_swing_highs = score_df.index[swing_high_mask.fillna(False) & score_df.index.isin(recent_index)]
+    if len(recent_swing_lows) > 0:
+        anchor_date = recent_swing_lows[-1]
+    else:
+        anchor_date = score_df.index[max(0, len(score_df) - 60)]
+    anchor_mask = score_df.index >= anchor_date
+    anchored_vwap = pd.Series(np.nan, index=score_df.index, dtype=float)
+    cum_pv = (typical_price[anchor_mask] * volume[anchor_mask]).cumsum()
+    cum_vol = volume[anchor_mask].cumsum().replace(0, np.nan)
+    anchored_vwap.loc[anchor_mask] = cum_pv / cum_vol
+
+    # --- regime shading on price panel ---
+    if len(score_df) > 1:
+        group_id = (regime != regime.shift(1)).cumsum()
+        temp = score_df.copy()
+        temp['_group_id'] = group_id.values
+        for _, seg in temp.groupby('_group_id'):
+            label = str(seg['Recommendation'].iloc[0]) if 'Recommendation' in seg.columns else 'HOLD'
+            fig.add_vrect(
+                x0=seg.index[0], x1=seg.index[-1],
+                fillcolor=regime_color_map.get(label, 'rgba(148,163,184,0.08)'),
+                opacity=0.32, line_width=0, row=1, col=1
+            )
+
+    # --- row 1: price panel ---
     fig.add_trace(
         go.Candlestick(
-            x=score_df.index,
-            open=score_df['Open'],
-            high=score_df['High'],
-            low=score_df['Low'],
-            close=score_df['Close'],
-            name='Adjusted OHLC',
-            increasing_line_color='#16a34a',
-            decreasing_line_color='#dc2626',
-            increasing_fillcolor='rgba(22,163,74,0.75)',
-            decreasing_fillcolor='rgba(220,38,38,0.75)',
-            whiskerwidth=0.4,
-            opacity=0.95,
+            x=score_df.index, open=score_df['Open'], high=score_df['High'], low=score_df['Low'], close=score_df['Close'],
+            name='Adjusted OHLC', increasing_line_color='#16a34a', decreasing_line_color='#dc2626',
+            increasing_fillcolor='rgba(22,163,74,0.75)', decreasing_fillcolor='rgba(220,38,38,0.75)',
+            whiskerwidth=0.4, opacity=0.95,
         ),
         row=1, col=1, secondary_y=False
     )
 
+    # Bollinger envelope
     if 'BB_UPPER' in score_df.columns and 'BB_LOWER' in score_df.columns:
         fig.add_trace(
-            go.Scatter(
-                x=score_df.index, y=score_df['BB_UPPER'], mode='lines',
-                line=dict(width=1.0, dash='dot', color='rgba(59,130,246,0.55)'),
-                name='BB Upper', showlegend=True
-            ),
+            go.Scatter(x=score_df.index, y=score_df['BB_UPPER'], mode='lines', line=dict(width=1.0, dash='dot', color='rgba(59,130,246,0.50)'), name='BB Upper'),
             row=1, col=1, secondary_y=False
         )
         fig.add_trace(
-            go.Scatter(
-                x=score_df.index, y=score_df['BB_LOWER'], mode='lines',
-                line=dict(width=1.0, dash='dot', color='rgba(59,130,246,0.55)'),
-                fill='tonexty', fillcolor='rgba(59,130,246,0.08)',
-                name='Bollinger Envelope', showlegend=True
-            ),
+            go.Scatter(x=score_df.index, y=score_df['BB_LOWER'], mode='lines', line=dict(width=1.0, dash='dot', color='rgba(59,130,246,0.50)'), fill='tonexty', fillcolor='rgba(59,130,246,0.08)', name='Bollinger Envelope'),
             row=1, col=1, secondary_y=False
         )
 
-    ema_specs = [
-        ('EMA_20', 'EMA 20', '#2563eb', 1.4, 'solid'),
-        ('EMA_50', 'EMA 50', '#f59e0b', 1.6, 'solid'),
-        ('EMA_200', 'EMA 200', '#111827', 1.8, 'dash'),
-    ]
+    # Trend averages
+    ema_specs = [('EMA_20', 'EMA 20', '#2563eb', 1.4, 'solid'), ('EMA_50', 'EMA 50', '#f59e0b', 1.6, 'solid'), ('EMA_200', 'EMA 200', '#111827', 1.8, 'dash')]
     for col, name, color, width, dash in ema_specs:
         if col in score_df.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=score_df.index, y=score_df[col], mode='lines', name=name,
-                    line=dict(color=color, width=width, dash=dash),
-                ),
-                row=1, col=1, secondary_y=False
-            )
+            fig.add_trace(go.Scatter(x=score_df.index, y=score_df[col], mode='lines', name=name, line=dict(color=color, width=width, dash=dash)), row=1, col=1, secondary_y=False)
 
-    # Highlight latest regime state on price panel
-    if len(score_df):
-        latest = score_df.iloc[-1]
-        regime_color_map = {
-            'STRONG BUY': '#16a34a',
-            'BUY': '#84cc16',
-            'HOLD': '#f59e0b',
-            'SELL': '#f97316',
-            'STRONG SELL': '#dc2626',
-        }
-        regime = str(latest.get('Recommendation', 'HOLD'))
-        regime_color = regime_color_map.get(regime, '#64748b')
-        fig.add_trace(
-            go.Scatter(
-                x=[score_df.index[-1]], y=[latest['Close']], mode='markers',
-                name=f'Latest Regime: {regime}',
-                marker=dict(size=12, color=regime_color, line=dict(width=1.2, color='white')),
-                hovertemplate='Date=%{x}<br>Adjusted Close=%{y:.2f}<br>Recommendation=' + regime + '<extra></extra>',
-            ),
-            row=1, col=1, secondary_y=False
-        )
+    # Dynamic trend channel
+    if trend_mid.notna().any():
+        fig.add_trace(go.Scatter(x=score_df.index, y=trend_upper, mode='lines', name='Trend Channel Upper', line=dict(color='#0891b2', width=1.2, dash='dash')), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=score_df.index, y=trend_lower, mode='lines', name='Trend Channel Lower', line=dict(color='#0891b2', width=1.2, dash='dash'), fill='tonexty', fillcolor='rgba(8,145,178,0.08)'), row=1, col=1, secondary_y=False)
+        fig.add_trace(go.Scatter(x=score_df.index, y=trend_mid, mode='lines', name='Trend Channel Mid', line=dict(color='#0f766e', width=1.4, dash='dot')), row=1, col=1, secondary_y=False)
 
-    # Volume on secondary axis
-    fig.add_trace(
-        go.Bar(
-            x=score_df.index, y=score_df['Volume'], name='Volume', opacity=0.22,
-            marker_color=volume_colors,
-            hovertemplate='Date=%{x}<br>Volume=%{y:,.0f}<extra></extra>',
-        ),
-        row=1, col=1, secondary_y=True
-    )
+    # Anchored VWAP
+    if anchored_vwap.notna().any():
+        fig.add_trace(go.Scatter(x=score_df.index, y=anchored_vwap, mode='lines', name='Anchored VWAP', line=dict(color='#7c3aed', width=2.0)), row=1, col=1, secondary_y=False)
 
-    # --- Row 2: score / confidence panel ---
-    fig.add_trace(
-        go.Scatter(
-            x=score_df.index, y=score_df['Institutional Score'], mode='lines', name='Institutional Score',
-            line=dict(color='#111827', width=2.4),
-            fill='tozeroy', fillcolor='rgba(17,24,39,0.08)'
-        ),
-        row=2, col=1
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=score_df.index, y=score_df['Confidence Score'], mode='lines', name='Confidence Score',
-            line=dict(color='#7c3aed', width=2.0, dash='dot')
-        ),
-        row=2, col=1
-    )
-    score_bands = [
-        (0, 25, 'rgba(220,38,38,0.08)'),
-        (25, 40, 'rgba(249,115,22,0.08)'),
-        (40, 60, 'rgba(245,158,11,0.08)'),
-        (60, 75, 'rgba(132,204,22,0.08)'),
-        (75, 100, 'rgba(22,163,74,0.08)'),
-    ]
+    # Support / resistance bands
+    fig.add_trace(go.Scatter(x=score_df.index, y=resistance_20, mode='lines', name='20D Resistance', line=dict(color='#a855f7', width=1.1, dash='dash')), row=1, col=1, secondary_y=False)
+    fig.add_trace(go.Scatter(x=score_df.index, y=support_20, mode='lines', name='20D Support', line=dict(color='#0f766e', width=1.1, dash='dash')), row=1, col=1, secondary_y=False)
+    fig.add_trace(go.Scatter(x=score_df.index, y=resistance_60, mode='lines', name='60D Resistance', line=dict(color='#c026d3', width=1.0, dash='dot')), row=1, col=1, secondary_y=False)
+    fig.add_trace(go.Scatter(x=score_df.index, y=support_60, mode='lines', name='60D Support', line=dict(color='#14b8a6', width=1.0, dash='dot')), row=1, col=1, secondary_y=False)
+
+    # Buy / Sell markers based on recommendation regime changes
+    rec_prev = regime.shift(1).fillna('HOLD')
+    buy_mask = regime.isin(['BUY', 'STRONG BUY']) & ~rec_prev.isin(['BUY', 'STRONG BUY'])
+    sell_mask = regime.isin(['SELL', 'STRONG SELL']) & ~rec_prev.isin(['SELL', 'STRONG SELL'])
+    hold_mask = (regime == 'HOLD') & (rec_prev != 'HOLD')
+    if buy_mask.any():
+        fig.add_trace(go.Scatter(x=score_df.index[buy_mask], y=score_df.loc[buy_mask, 'Low'] * 0.985, mode='markers', name='BUY Signal', marker=dict(symbol='triangle-up', size=12, color='#16a34a', line=dict(width=1.1, color='white')), hovertemplate='Date=%{x}<br>BUY Signal<br>Adjusted Price=%{y:.2f}<extra></extra>'), row=1, col=1, secondary_y=False)
+    if sell_mask.any():
+        fig.add_trace(go.Scatter(x=score_df.index[sell_mask], y=score_df.loc[sell_mask, 'High'] * 1.015, mode='markers', name='SELL Signal', marker=dict(symbol='triangle-down', size=12, color='#dc2626', line=dict(width=1.1, color='white')), hovertemplate='Date=%{x}<br>SELL Signal<br>Adjusted Price=%{y:.2f}<extra></extra>'), row=1, col=1, secondary_y=False)
+    if hold_mask.any():
+        fig.add_trace(go.Scatter(x=score_df.index[hold_mask], y=score_df.loc[hold_mask, 'Close'], mode='markers', name='HOLD / Neutral', marker=dict(symbol='circle', size=8, color='#f59e0b', line=dict(width=0.8, color='white')), hovertemplate='Date=%{x}<br>HOLD / Neutral<br>Adjusted Close=%{y:.2f}<extra></extra>'), row=1, col=1, secondary_y=False)
+
+    # Swing high / low labels (last few only for readability)
+    swing_high_points = score_df.loc[swing_high_mask.fillna(False), ['High']].tail(4)
+    swing_low_points = score_df.loc[swing_low_mask.fillna(False), ['Low']].tail(4)
+    if not swing_high_points.empty:
+        fig.add_trace(go.Scatter(x=swing_high_points.index, y=swing_high_points['High'] * 1.01, mode='markers+text', name='Swing High', text=['SH'] * len(swing_high_points), textposition='top center', marker=dict(symbol='diamond', size=9, color='#9333ea', line=dict(width=0.8, color='white')), hovertemplate='Date=%{x}<br>Swing High=%{y:.2f}<extra></extra>'), row=1, col=1, secondary_y=False)
+    if not swing_low_points.empty:
+        fig.add_trace(go.Scatter(x=swing_low_points.index, y=swing_low_points['Low'] * 0.99, mode='markers+text', name='Swing Low', text=['SL'] * len(swing_low_points), textposition='bottom center', marker=dict(symbol='diamond', size=9, color='#0f766e', line=dict(width=0.8, color='white')), hovertemplate='Date=%{x}<br>Swing Low=%{y:.2f}<extra></extra>'), row=1, col=1, secondary_y=False)
+
+    # Latest regime marker
+    latest = score_df.iloc[-1]
+    latest_regime = str(latest.get('Recommendation', 'HOLD'))
+    fig.add_trace(go.Scatter(x=[score_df.index[-1]], y=[latest['Close']], mode='markers', name=f'Latest Regime: {latest_regime}', marker=dict(size=13, color=regime_marker_map.get(latest_regime, '#64748b'), line=dict(width=1.2, color='white')), hovertemplate='Date=%{x}<br>Adjusted Close=%{y:.2f}<br>Recommendation=' + latest_regime + '<extra></extra>'), row=1, col=1, secondary_y=False)
+
+    # Price target box near the right edge
+    latest_close = float(latest['Close'])
+    target_floor = float(np.nanmax([latest_close, resistance_20.iloc[-1] if pd.notna(resistance_20.iloc[-1]) else np.nan, anchored_vwap.iloc[-1] if pd.notna(anchored_vwap.iloc[-1]) else np.nan]))
+    target_ceiling = float(np.nanmax([target_floor, resistance_60.iloc[-1] if pd.notna(resistance_60.iloc[-1]) else np.nan, trend_upper.iloc[-1] if pd.notna(trend_upper.iloc[-1]) else np.nan]))
+    support_floor = float(np.nanmin([support_20.iloc[-1] if pd.notna(support_20.iloc[-1]) else latest_close, support_60.iloc[-1] if pd.notna(support_60.iloc[-1]) else latest_close, trend_lower.iloc[-1] if pd.notna(trend_lower.iloc[-1]) else latest_close]))
+    target_box_x0 = score_df.index[max(0, len(score_df) - min(18, len(score_df)))]
+    target_box_x1 = score_df.index[-1]
+    if np.isfinite(target_floor) and np.isfinite(target_ceiling) and target_ceiling >= target_floor:
+        fig.add_hrect(y0=target_floor, y1=target_ceiling, fillcolor='rgba(22,163,74,0.10)', line_color='rgba(22,163,74,0.55)', line_width=1, row=1, col=1)
+        fig.add_annotation(x=target_box_x1, y=target_ceiling, xref='x1', yref='y1', text=f'Target Box<br>{target_floor:,.2f} – {target_ceiling:,.2f}', showarrow=True, arrowhead=1, ax=35, ay=-25, bgcolor='rgba(236,253,243,0.95)', bordercolor='rgba(22,163,74,0.55)', font=dict(size=11, color='#065f46'), row=1, col=1)
+    if np.isfinite(support_floor):
+        fig.add_annotation(x=target_box_x1, y=support_floor, xref='x1', yref='y1', text=f'Risk Pivot<br>{support_floor:,.2f}', showarrow=True, arrowhead=1, ax=30, ay=25, bgcolor='rgba(255,247,237,0.95)', bordercolor='rgba(249,115,22,0.55)', font=dict(size=11, color='#9a3412'), row=1, col=1)
+
+    # Volume bars on secondary axis
+    fig.add_trace(go.Bar(x=score_df.index, y=score_df['Volume'], name='Volume', opacity=0.22, marker_color=volume_colors, hovertemplate='Date=%{x}<br>Volume=%{y:,.0f}<extra></extra>'), row=1, col=1, secondary_y=True)
+
+    # --- row 2: institutional score panel ---
+    fig.add_trace(go.Scatter(x=score_df.index, y=score_df['Institutional Score'], mode='lines', name='Institutional Score', line=dict(color='#111827', width=2.4), fill='tozeroy', fillcolor='rgba(17,24,39,0.08)'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=score_df.index, y=score_df['Confidence Score'], mode='lines', name='Confidence Score', line=dict(color='#7c3aed', width=2.0, dash='dot')), row=2, col=1)
+    score_bands = [(0, 25, 'rgba(220,38,38,0.08)'), (25, 40, 'rgba(249,115,22,0.08)'), (40, 60, 'rgba(245,158,11,0.08)'), (60, 75, 'rgba(132,204,22,0.08)'), (75, 100, 'rgba(22,163,74,0.08)')]
     for y0, y1, color in score_bands:
         fig.add_hrect(y0=y0, y1=y1, fillcolor=color, line_width=0, row=2, col=1)
     for y in (25, 40, 60, 75):
         fig.add_hline(y=y, line_dash='dot', line_width=1, line_color='rgba(100,116,139,0.7)', row=2, col=1)
 
-    # --- Row 3: factor history ---
+    # --- row 3: factor contribution history ---
     factor_cols = ['Trend Score','Momentum Score','Relative Strength Score','Volume Score','Volatility Score','Risk Score','Market Regime Score']
-    factor_color_map = {
-        'Trend Score': '#2563eb',
-        'Momentum Score': '#7c3aed',
-        'Relative Strength Score': '#14b8a6',
-        'Volume Score': '#f59e0b',
-        'Volatility Score': '#ef4444',
-        'Risk Score': '#64748b',
-        'Market Regime Score': '#16a34a',
-    }
+    factor_color_map = {'Trend Score': '#2563eb', 'Momentum Score': '#7c3aed', 'Relative Strength Score': '#14b8a6', 'Volume Score': '#f59e0b', 'Volatility Score': '#ef4444', 'Risk Score': '#64748b', 'Market Regime Score': '#16a34a'}
     for col in factor_cols:
         if col in score_df.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=score_df.index, y=score_df[col], mode='lines', stackgroup='one', name=col.replace(' Score',''),
-                    line=dict(width=0.9, color=factor_color_map.get(col)),
-                    hovertemplate='Date=%{x}<br>' + col.replace(' Score','') + '=%{y:.2f}<extra></extra>'
-                ),
-                row=3, col=1
-            )
+            fig.add_trace(go.Scatter(x=score_df.index, y=score_df[col], mode='lines', stackgroup='one', name=col.replace(' Score',''), line=dict(width=0.9, color=factor_color_map.get(col)), hovertemplate='Date=%{x}<br>' + col.replace(' Score','') + '=%{y:.2f}<extra></extra>'), row=3, col=1)
 
-    fig.update_layout(
-        height=1040,
-        template='plotly_white',
-        hovermode='x unified',
-        margin=dict(l=20, r=20, t=70, b=20),
-        legend=dict(orientation='h', yanchor='bottom', y=1.01, xanchor='right', x=1.0),
-        xaxis_rangeslider_visible=False,
-        bargap=0.0,
+    # --- mini performance header ---
+    score_now = float(latest.get('Institutional Score', np.nan))
+    confidence_now = float(latest.get('Confidence Score', np.nan))
+    regime_now = str(latest.get('Recommendation', 'HOLD'))
+    ret_20 = float(score_df['Close'].pct_change(20).iloc[-1] * 100) if len(score_df) > 20 and pd.notna(score_df['Close'].pct_change(20).iloc[-1]) else np.nan
+    ret_63 = float(score_df['Close'].pct_change(63).iloc[-1] * 100) if len(score_df) > 63 and pd.notna(score_df['Close'].pct_change(63).iloc[-1]) else np.nan
+    ret_252 = float(score_df['Close'].pct_change(252).iloc[-1] * 100) if len(score_df) > 252 and pd.notna(score_df['Close'].pct_change(252).iloc[-1]) else np.nan
+    avwap_now = float(anchored_vwap.dropna().iloc[-1]) if anchored_vwap.notna().any() else np.nan
+    perf_text = (
+        f"<b>Adjusted Close:</b> {latest_close:,.2f} &nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"<b>20D:</b> {ret_20:,.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"<b>3M:</b> {ret_63:,.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"<b>1Y:</b> {ret_252:,.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"<b>Anchored VWAP:</b> {avwap_now:,.2f} &nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"<b>Score:</b> {score_now:,.1f}/100 &nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"<b>Confidence:</b> {confidence_now:,.1f}% &nbsp;&nbsp;|&nbsp;&nbsp; "
+        f"<b>Regime:</b> {regime_now}"
     )
+    fig.add_annotation(xref='paper', yref='paper', x=0.0, y=1.11, showarrow=False, align='left', text=perf_text, font=dict(size=12, color='#111827'), bgcolor='rgba(255,255,255,0.92)', bordercolor='rgba(203,213,225,0.95)', borderwidth=1, borderpad=6)
+
+    fig.update_layout(height=1110, template='plotly_white', hovermode='x unified', margin=dict(l=20, r=20, t=100, b=20), legend=dict(orientation='h', yanchor='bottom', y=1.01, xanchor='right', x=1.0), xaxis_rangeslider_visible=False, bargap=0.0)
     fig.update_xaxes(showgrid=True, gridcolor='#eef2f6')
     fig.update_yaxes(showgrid=True, gridcolor='#eef2f6', title_text='Adjusted Price', row=1, col=1, secondary_y=False)
     fig.update_yaxes(showgrid=False, title_text='Volume', row=1, col=1, secondary_y=True)
@@ -1602,7 +1657,7 @@ def institutional_score_chart(score_df: pd.DataFrame) -> go.Figure:
 # -------------------------------------------------------------------------
 # SIDEBAR
 # -------------------------------------------------------------------------
-st.sidebar.title("📊 SupertrendPro V5.0.2 HF2")
+st.sidebar.title("📊 SupertrendPro V5.0.2 HF4")
 st.sidebar.caption("Real Yahoo Finance daily data only. No synthetic price series, no proxy fallback.")
 
 selected_category = st.sidebar.selectbox("Select Sector / Category:", list(MARKET_DATA.keys()), index=2)
@@ -1755,7 +1810,7 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
-st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V5.0.2 HF2")
+st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V5.0.2 HF4")
 st.caption("Institutional V5.0.2 HF1 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
 st.caption("Cloud-stable build: Arrow-safe tables, modern Streamlit width API, TA-Lib disabled by default.")
 
