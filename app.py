@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # -------------------------------------------------------------------------
-# BIST PRO TECHNICAL ANALYZER – NO SYNTHETIC DATA
+# SUPERTRENDPRO INSTITUTIONAL V2 – NO SYNTHETIC DATA
 # Trend Following + Smart Supertrend + Beta + Risk Metrics
 # Expanded BIST Blue-Chip Universe + Capital Gain Leaders Lab
 # -------------------------------------------------------------------------
-# Save as: bist_scanner_trend_beta_PRO_NO_SYNTHETIC.py
+# Save as: SupertrendPro_INSTITUTIONAL_V2_NO_SYNTHETIC.py
 # Run:
-#   streamlit run bist_scanner_trend_beta_PRO_NO_SYNTHETIC.py --server.port 8516
+#   streamlit run SupertrendPro_INSTITUTIONAL_V2_NO_SYNTHETIC.py --server.port 8516
 # -------------------------------------------------------------------------
 
 import warnings
@@ -500,6 +500,16 @@ def compute_return_metrics(ret: pd.Series, benchmark_ret: Optional[pd.Series] = 
     sortino = cagr / downside if downside and downside > 0 else np.nan
     mdd = max_drawdown(eq)
     calmar = cagr / abs(mdd) if mdd and mdd < 0 else np.nan
+    dd_series = eq / eq.cummax() - 1.0
+    ulcer = float(np.sqrt(np.mean(np.square(dd_series * 100)))) if len(dd_series) else np.nan
+    gains = float(r[r > 0].sum())
+    losses_abs = float(abs(r[r < 0].sum()))
+    omega = gains / losses_abs if losses_abs > 0 else np.nan
+    recovery_days = 0
+    longest_recovery_days = 0
+    for underwater in (dd_series < 0):
+        recovery_days = recovery_days + 1 if underwater else 0
+        longest_recovery_days = max(longest_recovery_days, recovery_days)
     var95, cvar95 = tail_risk(r, 0.95)
     var99, cvar99 = tail_risk(r, 0.99)
 
@@ -526,6 +536,9 @@ def compute_return_metrics(ret: pd.Series, benchmark_ret: Optional[pd.Series] = 
         "Sharpe": sharpe,
         "Sortino": sortino,
         "Calmar": calmar,
+        "Omega": omega,
+        "Ulcer Index": ulcer,
+        "Longest Drawdown Days": int(longest_recovery_days),
         "Max Drawdown %": mdd * 100 if pd.notna(mdd) else np.nan,
         "VaR 95% %": var95 * 100 if pd.notna(var95) else np.nan,
         "CVaR 95% %": cvar95 * 100 if pd.notna(cvar95) else np.nan,
@@ -580,6 +593,9 @@ def compute_stats(df: pd.DataFrame, trades: list, index_returns: Optional[pd.Ser
         "sharpe": stg.get("Sharpe", np.nan),
         "sortino": stg.get("Sortino", np.nan),
         "calmar": stg.get("Calmar", np.nan),
+        "omega": stg.get("Omega", np.nan),
+        "ulcer_index": stg.get("Ulcer Index", np.nan),
+        "longest_dd_days": stg.get("Longest Drawdown Days", np.nan),
         "var95_pct": stg.get("VaR 95% %", np.nan),
         "cvar95_pct": stg.get("CVaR 95% %", np.nan),
         "var99_pct": stg.get("VaR 99% %", np.nan),
@@ -641,6 +657,8 @@ def backtest_macd_atr_trailing(
     signalperiod: int = 9,
     market_filter=None,
     index_returns: Optional[pd.Series] = None,
+    transaction_cost_bps: float = 8.0,
+    slippage_bps: float = 4.0,
 ):
     df = df.copy()
     df = df[df.index >= pd.Timestamp(start_date)].copy()
@@ -674,7 +692,7 @@ def backtest_macd_atr_trailing(
     if use_rsi_exit:
         exit_rule |= (df["RSI"] < rsi_exit_level).fillna(False)
 
-    return _run_trailing_backtest(df, entry_long, exit_rule, atr_mult_stop, "MACD/RSI_EXIT", index_returns)
+    return _run_trailing_backtest(df, entry_long, exit_rule, atr_mult_stop, "MACD/RSI_EXIT", index_returns, transaction_cost_bps, slippage_bps)
 
 
 def backtest_supertrend_trailing(
@@ -688,6 +706,8 @@ def backtest_supertrend_trailing(
     atr_mult_stop: float = 2.0,
     market_filter=None,
     index_returns: Optional[pd.Series] = None,
+    transaction_cost_bps: float = 8.0,
+    slippage_bps: float = 4.0,
 ):
     df = df.copy()
     st_line, st_dir = compute_supertrend(df, st_period, st_mult)
@@ -712,10 +732,10 @@ def backtest_supertrend_trailing(
     entry_long = entry_state
 
     exit_rule = ((df["ST_Dir"] == -1) & (df["ST_Dir_prev"] == 1)).fillna(False)
-    return _run_trailing_backtest(df, entry_long.fillna(False), exit_rule, atr_mult_stop, "SUPERTREND_FLIP", index_returns)
+    return _run_trailing_backtest(df, entry_long.fillna(False), exit_rule, atr_mult_stop, "SUPERTREND_FLIP", index_returns, transaction_cost_bps, slippage_bps)
 
 
-def _run_trailing_backtest(df: pd.DataFrame, entry_long: pd.Series, exit_rule: pd.Series, atr_mult_stop: float, exit_label: str, index_returns: Optional[pd.Series]):
+def _run_trailing_backtest(df: pd.DataFrame, entry_long: pd.Series, exit_rule: pd.Series, atr_mult_stop: float, exit_label: str, index_returns: Optional[pd.Series], transaction_cost_bps: float = 8.0, slippage_bps: float = 4.0):
     df = df.copy()
     entry_long = pd.Series(entry_long, index=df.index).reindex(df.index).fillna(False).astype(bool)
     exit_rule = pd.Series(exit_rule, index=df.index).reindex(df.index).fillna(False).astype(bool)
@@ -785,7 +805,12 @@ def _run_trailing_backtest(df: pd.DataFrame, entry_long: pd.Series, exit_rule: p
     df["Exit_Rule"] = exit_rule
     df["Days_In_Market"] = df["Position"].expanding().sum()
     df["Return"] = df["Close"].pct_change().fillna(0.0)
-    df["Strategy_Return"] = df["Position"].shift(1).fillna(0) * df["Return"]
+    df["Gross_Strategy_Return"] = df["Position"].shift(1).fillna(0) * df["Return"]
+    turnover = df["Position"].diff().abs().fillna(df["Position"].abs())
+    one_way_cost = (float(transaction_cost_bps) + float(slippage_bps)) / 10000.0
+    df["Trading_Cost"] = turnover * one_way_cost
+    df["Strategy_Return"] = df["Gross_Strategy_Return"] - df["Trading_Cost"]
+    df["Turnover"] = turnover
     df["BH_Equity"] = (1 + df["Return"]).cumprod()
     df["Strategy_Equity"] = (1 + df["Strategy_Return"]).cumprod()
     df["Strategy_Drawdown"] = df["Strategy_Equity"] / df["Strategy_Equity"].cummax() - 1
@@ -1069,6 +1094,11 @@ start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("today") + pd.Timedelta(days=1))
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("Execution Assumptions")
+transaction_cost_bps = st.sidebar.number_input("Transaction Cost (bps per side)", min_value=0.0, max_value=100.0, value=8.0, step=1.0)
+slippage_bps = st.sidebar.number_input("Slippage (bps per side)", min_value=0.0, max_value=100.0, value=4.0, step=1.0)
+st.sidebar.caption("Net strategy returns deduct costs only when position changes. No synthetic prices are used.")
+
 use_index_filter_global = st.sidebar.checkbox("Use BIST 100 Regime Filter (XU100 > EMA200)", value=False)
 strategy_choice = st.sidebar.radio("Select Strategy Variant:", ["MACD + ATR Trailing", "Smart Supertrend", "Smart Supertrend + Optimizer"], index=1)
 
@@ -1096,8 +1126,8 @@ else:
 # -------------------------------------------------------------------------
 # MAIN DATA LOAD
 # -------------------------------------------------------------------------
-st.markdown("<h1 class='mk-title'>BIST PRO Technical Scanner — Trend, Beta, Risk & Capital Gain Leaders</h1>", unsafe_allow_html=True)
-st.caption("MK FinTECH LabGEN @2026 Istanbul | No synthetic data | Yahoo Finance daily OHLCV | Educational analytics, not investment advice")
+st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V2 — Trend, Execution Audit, Risk & Capital Gain Leaders</h1>", unsafe_allow_html=True)
+st.caption("MK FinTECH LabGEN @2026 Istanbul | No synthetic data | Yahoo Finance daily OHLCV | Net-of-cost backtests | Educational analytics, not investment advice")
 
 if not TALIB_AVAILABLE:
     st.info("TA-Lib is not installed. The app is using internal pandas/numpy indicator formulas. Price data still comes only from Yahoo Finance.")
@@ -1135,6 +1165,8 @@ if strategy_choice.startswith("MACD"):
         signalperiod=macd_signal,
         market_filter=index_regime if use_index_filter_global else None,
         index_returns=index_returns,
+        transaction_cost_bps=transaction_cost_bps,
+        slippage_bps=slippage_bps,
     )
 else:
     plot_data, trades_df, stats = backtest_supertrend_trailing(
@@ -1147,6 +1179,8 @@ else:
         atr_mult_stop=atr_mult_stop_st,
         market_filter=index_regime if use_index_filter_global else None,
         index_returns=index_returns,
+        transaction_cost_bps=transaction_cost_bps,
+        slippage_bps=slippage_bps,
     )
 
 last = plot_data.iloc[-1]
@@ -1186,7 +1220,7 @@ with tab1:
 # -------------------------------------------------------------------------
 with tab2:
     st.subheader("Smart Data Table — OHLCV, Signals, Risk & Rolling Beta")
-    cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
+    cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Gross_Strategy_Return", "Trading_Cost", "Turnover", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
     show = plot_data[[c for c in cols if c in plot_data.columns]].sort_index(ascending=False).copy()
     st.dataframe(style_smart_table(show.head(800)), use_container_width=True, height=620)
     csv = show.to_csv(index=True).encode("utf-8")
@@ -1236,6 +1270,24 @@ with tab4:
     d2.metric("Buy / Sell Signals", f"{stats.get('buy_signal_count', 0)} / {stats.get('sell_signal_count', 0)}")
     d3.metric("Entry-Eligible Days", f"{stats.get('entry_eligible_days', 0)}")
     d4.metric("Open Position Now", "YES" if stats.get('active_position_now', False) else "NO")
+
+    e1, e2, e3, e4 = st.columns(4)
+    e1.metric("Omega Ratio", f"{stats.get('omega', np.nan):.2f}")
+    e2.metric("Ulcer Index", f"{stats.get('ulcer_index', np.nan):.2f}")
+    e3.metric("Longest Drawdown", f"{stats.get('longest_dd_days', np.nan):.0f} days")
+    total_cost_pct = plot_data.get("Trading_Cost", pd.Series(0.0, index=plot_data.index)).sum() * 100
+    e4.metric("Cumulative Trading Costs", f"{total_cost_pct:.2f}%")
+
+    diagnostic_rows = [
+        {"Check": "Valid observations", "Value": len(plot_data), "Status": "PASS" if len(plot_data) >= 120 else "REVIEW"},
+        {"Check": "Entry-eligible days", "Value": stats.get('entry_eligible_days', 0), "Status": "PASS" if stats.get('entry_eligible_days', 0) > 0 else "FAIL"},
+        {"Check": "Buy signals", "Value": stats.get('buy_signal_count', 0), "Status": "PASS" if stats.get('buy_signal_count', 0) > 0 else "FAIL"},
+        {"Check": "Market exposure", "Value": f"{stats.get('exposure_pct', np.nan):.1f}%", "Status": "PASS" if stats.get('exposure_pct', 0) > 0 else "FAIL"},
+        {"Check": "Non-zero net returns", "Value": int((plot_data['Strategy_Return'].abs() > 1e-12).sum()), "Status": "PASS" if (plot_data['Strategy_Return'].abs() > 1e-12).any() else "FAIL"},
+        {"Check": "Benchmark alignment", "Value": int(index_returns.reindex(plot_data.index).notna().sum()) if index_returns is not None else 0, "Status": "PASS" if index_returns is not None and index_returns.reindex(plot_data.index).notna().sum() >= 60 else "REVIEW"},
+    ]
+    st.markdown("#### Strategy Execution Audit")
+    st.dataframe(pd.DataFrame(diagnostic_rows), use_container_width=True, hide_index=True)
 
     if stats.get('buy_signal_count', 0) == 0 and stats.get('entry_eligible_days', 0) == 0:
         st.warning("Strategy produced no eligible entry days under the current filters. Try disabling EMA200, ADX, or BIST100 regime filter, or use a longer backtest window.")
