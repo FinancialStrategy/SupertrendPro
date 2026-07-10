@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # -------------------------------------------------------------------------
-# SUPERTRENDPRO INSTITUTIONAL V4.1 – NO SYNTHETIC DATA + LEADING SIGNAL LAB
+# SUPERTRENDPRO INSTITUTIONAL V5.0.1 – NO SYNTHETIC DATA + LEADING SIGNAL LAB
 # Trend Following + Smart Supertrend + Beta + Risk Metrics
 # Expanded BIST Blue-Chip Universe + Capital Gain Leaders Lab
 # -------------------------------------------------------------------------
@@ -50,11 +50,11 @@ ROLLING_VOL_WINDOW = 63
 MIN_PRICE_OBS = 120
 BENCHMARK_SYMBOL = "XU100.IS"
 APP_VERSION = "4.1"
-APP_RELEASE_NAME = "SupertrendPro Institutional V4.1"
+APP_RELEASE_NAME = "SupertrendPro Institutional V5.0.1"
 
 st.set_page_config(
     layout="wide",
-    page_title="SupertrendPro Institutional V4.1",
+    page_title="SupertrendPro Institutional V5.0.1",
     initial_sidebar_state="expanded",
 )
 
@@ -1232,10 +1232,207 @@ def leading_signal_chart(df: pd.DataFrame, title: str) -> go.Figure:
     fig.update_layout(title=title,hovermode='x unified',height=900,template='plotly_white',margin=dict(l=20,r=20,t=60,b=20))
     return fig
 
+
+# -------------------------------------------------------------------------
+# INSTITUTIONAL LEADING SIGNAL ENGINE V5.0.1
+# -------------------------------------------------------------------------
+def _safe_percentile_rank(series: pd.Series, window: int = 252) -> pd.Series:
+    s = pd.Series(series, dtype=float)
+    return s.rolling(window, min_periods=max(40, window // 4)).apply(
+        lambda x: pd.Series(x).rank(pct=True).iloc[-1], raw=False
+    )
+
+def build_institutional_signal_engine(
+    df: pd.DataFrame,
+    benchmark_close: Optional[pd.Series] = None,
+    benchmark_returns: Optional[pd.Series] = None,
+    forward_horizon: int = 60,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, float]]:
+    """Explainable 100-point decision engine using only observed market data.
+
+    The current score uses information available through each close. Historical
+    probability estimates use only rows whose forward outcome is already known.
+    """
+    x = df.copy().sort_index()
+    close = x['Close'].astype(float)
+    ret = close.pct_change()
+
+    # Core derived series
+    ema20 = close.ewm(span=20, adjust=False, min_periods=20).mean()
+    ema50 = close.ewm(span=50, adjust=False, min_periods=50).mean()
+    ema200 = close.ewm(span=200, adjust=False, min_periods=200).mean()
+    roc20 = close.pct_change(20)
+    roc60 = close.pct_change(60)
+    vol20 = ret.rolling(20, min_periods=20).std() * np.sqrt(TRADING_DAYS)
+    vol60 = ret.rolling(60, min_periods=40).std() * np.sqrt(TRADING_DAYS)
+    drawdown = close / close.cummax() - 1.0
+    atr_pct = x['ATR'].astype(float) / close.replace(0, np.nan) if 'ATR' in x else pd.Series(np.nan, index=x.index)
+
+    volume = x['Volume'].astype(float)
+    vol_med20 = volume.rolling(20, min_periods=20).median()
+    obv = (np.sign(ret.fillna(0.0)) * volume).cumsum()
+    obv_ma20 = obv.rolling(20, min_periods=20).mean()
+
+    # Relative strength against XU100
+    if benchmark_close is not None:
+        bclose = pd.Series(benchmark_close, dtype=float).reindex(x.index).ffill()
+        rs = close / bclose.replace(0, np.nan)
+        rs20 = rs.pct_change(20)
+        rs60 = rs.pct_change(60)
+    else:
+        rs20 = pd.Series(0.0, index=x.index)
+        rs60 = pd.Series(0.0, index=x.index)
+
+    # Rolling beta/alpha proxies
+    if benchmark_returns is not None:
+        bret = pd.Series(benchmark_returns, dtype=float).reindex(x.index)
+        pair = pd.concat([ret.rename('asset'), bret.rename('bench')], axis=1)
+        cov = pair['asset'].rolling(60, min_periods=40).cov(pair['bench'])
+        var = pair['bench'].rolling(60, min_periods=40).var()
+        beta60 = cov / var.replace(0, np.nan)
+        alpha60 = (pair['asset'].rolling(60, min_periods=40).mean() - beta60 * pair['bench'].rolling(60, min_periods=40).mean()) * TRADING_DAYS
+        market_pass = (bclose > bclose.ewm(span=200, adjust=False, min_periods=200).mean()).astype(float) if benchmark_close is not None else pd.Series(0.5, index=x.index)
+    else:
+        beta60 = pd.Series(np.nan, index=x.index)
+        alpha60 = pd.Series(np.nan, index=x.index)
+        market_pass = pd.Series(0.5, index=x.index)
+
+    # 1) Trend: 20 points
+    trend_score = (
+        7.0 * (close > ema50).astype(float) +
+        7.0 * (ema50 > ema200).astype(float) +
+        6.0 * ((x.get('ADX', pd.Series(0, index=x.index)) > 18) & (x.get('ST_Dir', pd.Series(1, index=x.index)) >= 0)).astype(float)
+    )
+
+    # 2) Momentum: 20 points
+    rsi = x.get('RSI', pd.Series(50.0, index=x.index)).astype(float)
+    macd_hist = x.get('MACD_HIST', pd.Series(0.0, index=x.index)).astype(float)
+    momentum_score = (
+        6.0 * (roc20 > 0).astype(float) +
+        5.0 * (roc60 > 0).astype(float) +
+        5.0 * ((rsi >= 50) & (rsi <= 72)).astype(float) +
+        4.0 * ((macd_hist > 0) & (macd_hist > macd_hist.shift(1))).astype(float)
+    )
+
+    # 3) Relative strength: 15 points
+    relative_score = 8.0 * (rs20 > 0).astype(float) + 7.0 * (rs60 > 0).astype(float)
+
+    # 4) Volume/flow: 15 points
+    volume_score = (
+        7.0 * (volume > vol_med20).astype(float) +
+        5.0 * (obv > obv_ma20).astype(float) +
+        3.0 * (volume.pct_change(5) > 0).astype(float)
+    )
+
+    # 5) Volatility quality: 10 points; reward controlled, non-expanding risk
+    vol_rank = _safe_percentile_rank(vol20, 252)
+    volatility_score = (
+        5.0 * (vol20 <= vol60).astype(float) +
+        3.0 * (vol_rank <= 0.75).astype(float) +
+        2.0 * (atr_pct <= atr_pct.rolling(60, min_periods=30).median()).astype(float)
+    )
+
+    # 6) Risk quality: 10 points
+    risk_score = (
+        4.0 * (drawdown > -0.15).astype(float) +
+        3.0 * ((beta60.isna()) | (beta60 <= 1.25)).astype(float) +
+        3.0 * ((alpha60.isna()) | (alpha60 > 0)).astype(float)
+    )
+
+    # 7) Market regime: 10 points
+    market_score = 10.0 * market_pass.clip(0, 1)
+
+    factors = {
+        'Trend Score': trend_score,
+        'Momentum Score': momentum_score,
+        'Relative Strength Score': relative_score,
+        'Volume Score': volume_score,
+        'Volatility Score': volatility_score,
+        'Risk Score': risk_score,
+        'Market Regime Score': market_score,
+    }
+    for name, series in factors.items():
+        x[name] = pd.Series(series, index=x.index).fillna(0.0)
+    x['Institutional Score'] = sum(x[name] for name in factors).clip(0, 100)
+
+    # Confidence rewards broad factor agreement and stable recent score.
+    factor_max = pd.Series({
+        'Trend Score': 20, 'Momentum Score': 20, 'Relative Strength Score': 15,
+        'Volume Score': 15, 'Volatility Score': 10, 'Risk Score': 10,
+        'Market Regime Score': 10,
+    })
+    normalized = pd.DataFrame({k: x[k] / factor_max[k] for k in factor_max})
+    agreement = 1.0 - normalized.std(axis=1).clip(0, 0.5) / 0.5
+    stability = 1.0 - (x['Institutional Score'].rolling(20, min_periods=5).std() / 25.0).clip(0, 1)
+    x['Confidence Score'] = (100.0 * (0.6 * agreement + 0.4 * stability)).clip(0, 100)
+
+    x['Recommendation'] = pd.cut(
+        x['Institutional Score'],
+        bins=[-np.inf, 25, 40, 60, 75, np.inf],
+        labels=['STRONG SELL', 'SELL', 'HOLD', 'BUY', 'STRONG BUY'],
+    ).astype(str)
+
+    # Historical empirical probabilities from resolved forward outcomes only.
+    x[f'Forward {forward_horizon}D Return'] = close.shift(-forward_horizon) / close - 1.0
+    if benchmark_close is not None:
+        bench_fwd = bclose.shift(-forward_horizon) / bclose - 1.0
+        x[f'Forward {forward_horizon}D Active Return'] = x[f'Forward {forward_horizon}D Return'] - bench_fwd
+    else:
+        x[f'Forward {forward_horizon}D Active Return'] = np.nan
+
+    current_score = float(x['Institutional Score'].iloc[-1])
+    resolved = x.iloc[:-forward_horizon].dropna(subset=[f'Forward {forward_horizon}D Return']) if len(x) > forward_horizon else x.iloc[0:0]
+    band = 7.5
+    peers = resolved[(resolved['Institutional Score'] >= current_score - band) & (resolved['Institutional Score'] <= current_score + band)]
+    if len(peers) < 20 and not resolved.empty:
+        peers = resolved.assign(_dist=(resolved['Institutional Score'] - current_score).abs()).nsmallest(min(60, len(resolved)), '_dist')
+
+    positive_prob = float((peers[f'Forward {forward_horizon}D Return'] > 0).mean() * 100) if len(peers) else np.nan
+    plus10_prob = float((peers[f'Forward {forward_horizon}D Return'] >= 0.10).mean() * 100) if len(peers) else np.nan
+    active_col = f'Forward {forward_horizon}D Active Return'
+    outperform_prob = float((peers[active_col] > 0).mean() * 100) if len(peers) and peers[active_col].notna().any() else np.nan
+
+    latest = x.iloc[-1]
+    summary = {
+        'Institutional Score': float(latest['Institutional Score']),
+        'Confidence Score': float(latest['Confidence Score']),
+        'Recommendation': str(latest['Recommendation']),
+        f'Positive Return Probability {forward_horizon}D %': positive_prob,
+        f'+10% Probability {forward_horizon}D %': plus10_prob,
+        f'Outperform XU100 Probability {forward_horizon}D %': outperform_prob,
+        'Historical Analog Count': int(len(peers)),
+    }
+
+    contribution = pd.DataFrame({
+        'Factor': list(factor_max.index),
+        'Score': [float(latest[k]) for k in factor_max.index],
+        'Maximum': [float(factor_max[k]) for k in factor_max.index],
+    })
+    contribution['Contribution %'] = contribution['Score'] / contribution['Maximum'] * 100.0
+    return x, contribution, summary
+
+def institutional_score_chart(score_df: pd.DataFrame) -> go.Figure:
+    fig = make_subplots(
+        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+        row_heights=[0.42, 0.30, 0.28],
+        subplot_titles=('Adjusted Price', 'Institutional Score and Confidence', 'Factor Contribution History'),
+    )
+    fig.add_trace(go.Scatter(x=score_df.index, y=score_df['Close'], mode='lines', name='Adjusted Close'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=score_df.index, y=score_df['Institutional Score'], mode='lines', name='Institutional Score'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=score_df.index, y=score_df['Confidence Score'], mode='lines', name='Confidence'), row=2, col=1)
+    for y in (25, 40, 60, 75):
+        fig.add_hline(y=y, line_dash='dot', line_width=1, row=2, col=1)
+    factor_cols = ['Trend Score','Momentum Score','Relative Strength Score','Volume Score','Volatility Score','Risk Score','Market Regime Score']
+    for col in factor_cols:
+        fig.add_trace(go.Scatter(x=score_df.index, y=score_df[col], mode='lines', stackgroup='one', name=col.replace(' Score','')), row=3, col=1)
+    fig.update_layout(height=920, template='plotly_white', hovermode='x unified', margin=dict(l=20,r=20,t=60,b=20))
+    fig.update_yaxes(range=[0,100], row=2, col=1)
+    return fig
+
 # -------------------------------------------------------------------------
 # SIDEBAR
 # -------------------------------------------------------------------------
-st.sidebar.title("📊 SupertrendPro V4.1")
+st.sidebar.title("📊 SupertrendPro V5.0.1")
 st.sidebar.caption("Real Yahoo Finance daily data only. No synthetic price series, no proxy fallback.")
 
 selected_category = st.sidebar.selectbox("Select Sector / Category:", list(MARKET_DATA.keys()), index=2)
@@ -1280,7 +1477,7 @@ else:
 # -------------------------------------------------------------------------
 # MAIN DATA LOAD
 # -------------------------------------------------------------------------
-st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V4.1 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V5.0.1 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
 st.caption("MK FinTECH LabGEN @2026 Istanbul | No synthetic data | Yahoo Finance daily OHLCV | Net-of-cost backtests | Educational analytics, not investment advice")
 
 if not TALIB_AVAILABLE:
@@ -1341,8 +1538,8 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
-st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V4.1")
-st.caption("Institutional V4.1 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
+st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V5.0.1")
+st.caption("Institutional V5.0.1 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
 st.caption("Cloud-stable build: Arrow-safe tables, modern Streamlit width API, TA-Lib disabled by default.")
 
 # Top KPIs
@@ -1356,7 +1553,7 @@ k6.metric("Technical Score", f"{tech_score:.0f}/100")
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "📊 Strategy Chart",
     "📋 Smart Data Table",
     "📈 Technical Signals",
@@ -1366,6 +1563,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "🚀 Capital Gain Leaders Lab",
     "🧮 Mini Portfolio Lab",
     "🚦 Leading AL/SAT Signal Lab",
+    "🧠 Institutional Decision Engine",
 ])
 
 # -------------------------------------------------------------------------
@@ -1754,3 +1952,71 @@ with tab9:
         st.dataframe(style_smart_table(lead_show),width="stretch",height=620)
         st.download_button("Download Leading Signal Lab CSV",lab_df.to_csv(index=True).encode('utf-8'),file_name=f"{ticker_symbol.replace('.','_')}_leading_signal_lab.csv",mime='text/csv')
         st.caption("AL/SAT outputs are model signals, not guaranteed forecasts or investment advice. Their consistency must be judged through out-of-sample testing, turnover, drawdown and stability across parameter ranges.")
+
+# -------------------------------------------------------------------------
+# TAB 10: INSTITUTIONAL DECISION ENGINE
+# -------------------------------------------------------------------------
+with tab10:
+    st.subheader("Institutional Leading Signal Engine — Explainable 100-Point Decision Score")
+    st.markdown(
+        "<div class='ok-note'><b>Methodology:</b> Seven transparent factors are scored from observed Yahoo Finance data only: Trend (20), Momentum (20), Relative Strength vs XU100 (15), Volume/Flow (15), Volatility Quality (10), Risk Quality (10), and Market Regime (10). Historical probabilities are empirical outcomes from resolved past observations with similar scores; they are not synthetic forecasts.</div>",
+        unsafe_allow_html=True,
+    )
+    h1,h2,h3 = st.columns(3)
+    decision_horizon = h1.selectbox("Probability Horizon", [20, 40, 60, 90], index=2, key="decision_horizon")
+    h2.caption("Current signal uses information available through the latest close.")
+    h3.caption("Forward outcomes are used only for historical validation rows whose horizons are complete.")
+
+    score_df, factor_df, decision = build_institutional_signal_engine(
+        plot_data,
+        benchmark_close=(idx_ind['Close'] if idx_ind is not None and 'Close' in idx_ind else None),
+        benchmark_returns=index_returns,
+        forward_horizon=int(decision_horizon),
+    )
+
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Institutional Score", f"{decision['Institutional Score']:.1f}/100")
+    c2.metric("Confidence", f"{decision['Confidence Score']:.1f}%")
+    c3.metric("Final Recommendation", decision['Recommendation'])
+    c4.metric("Historical Analogs", f"{decision['Historical Analog Count']}")
+
+    p1,p2,p3 = st.columns(3)
+    p1.metric(f"Positive Return Probability ({decision_horizon}D)", f"{decision.get(f'Positive Return Probability {decision_horizon}D %', np.nan):.1f}%")
+    p2.metric(f"+10% Probability ({decision_horizon}D)", f"{decision.get(f'+10% Probability {decision_horizon}D %', np.nan):.1f}%")
+    p3.metric(f"Outperform XU100 Probability ({decision_horizon}D)", f"{decision.get(f'Outperform XU100 Probability {decision_horizon}D %', np.nan):.1f}%")
+
+    st.plotly_chart(institutional_score_chart(score_df), width="stretch", theme=None)
+
+    st.markdown("#### Current Factor Scorecard")
+    factor_display = factor_df.copy()
+    factor_display['Score'] = factor_display['Score'].round(2)
+    factor_display['Maximum'] = factor_display['Maximum'].round(2)
+    factor_display['Contribution %'] = factor_display['Contribution %'].round(1)
+    st.dataframe(
+        factor_display,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            'Score': st.column_config.NumberColumn(format='%.2f'),
+            'Maximum': st.column_config.NumberColumn(format='%.2f'),
+            'Contribution %': st.column_config.ProgressColumn(min_value=0, max_value=100, format='%.1f%%'),
+        },
+    )
+
+    st.markdown("#### Diagnostics 2.0 — Latest Daily Decisions")
+    decision_cols = [
+        'Close','Institutional Score','Confidence Score','Recommendation',
+        'Trend Score','Momentum Score','Relative Strength Score','Volume Score',
+        'Volatility Score','Risk Score','Market Regime Score',
+        f'Forward {decision_horizon}D Return', f'Forward {decision_horizon}D Active Return',
+    ]
+    decision_table = score_df[[c for c in decision_cols if c in score_df.columns]].tail(300).sort_index(ascending=False).copy()
+    st.dataframe(style_smart_table(decision_table), width="stretch", height=650)
+    st.download_button(
+        "Download Institutional Decision Engine CSV",
+        score_df.to_csv(index=True).encode('utf-8'),
+        file_name=f"{ticker_symbol.replace('.','_')}_institutional_decision_engine.csv",
+        mime='text/csv',
+    )
+    st.caption("Scores and empirical probabilities are decision-support outputs, not guaranteed forecasts or investment advice. Validate stability across horizons, assets, transaction costs and out-of-sample periods.")
+
