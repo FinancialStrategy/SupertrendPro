@@ -51,12 +51,12 @@ ROLLING_BETA_WINDOW = 60
 ROLLING_VOL_WINDOW = 63
 MIN_PRICE_OBS = 120
 BENCHMARK_SYMBOL = "XU100.IS"
-APP_VERSION = "5.0.2-HF1"
-APP_RELEASE_NAME = "SupertrendPro Institutional V5.0.2 HF1"
+APP_VERSION = "5.0.2"
+APP_RELEASE_NAME = "SupertrendPro Institutional V5.0.2"
 
 st.set_page_config(
     layout="wide",
-    page_title="SupertrendPro Institutional V5.0.2 HF1",
+    page_title="SupertrendPro Institutional V5.0.2",
     initial_sidebar_state="expanded",
 )
 
@@ -1358,7 +1358,7 @@ def build_institutional_signal_engine(
     x['Institutional Score'] = sum(x[name] for name in factors).clip(0, 100)
 
     # Confidence rewards broad factor agreement and stable recent score.
-    # HOTFIX: use a plain dictionary and iterate over .items(). Iterating directly
+    # Use a plain dictionary and iterate over .items(). Iterating directly
     # over a pandas Series returns its VALUES (20, 20, 15, ...), not its index.
     # The previous code therefore attempted x[20] and raised KeyError.
     factor_max = {
@@ -1657,7 +1657,7 @@ def institutional_score_chart(score_df: pd.DataFrame) -> go.Figure:
 # -------------------------------------------------------------------------
 # SIDEBAR
 # -------------------------------------------------------------------------
-st.sidebar.title("📊 SupertrendPro V5.0.2 HF4")
+st.sidebar.title("📊 SupertrendPro Institutional V5.0.2")
 st.sidebar.caption("Real Yahoo Finance daily data only. No synthetic price series, no proxy fallback.")
 
 selected_category = st.sidebar.selectbox("Select Sector / Category:", list(MARKET_DATA.keys()), index=2)
@@ -1731,7 +1731,7 @@ else:
 # -------------------------------------------------------------------------
 # MAIN DATA LOAD
 # -------------------------------------------------------------------------
-st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V5.0.2 HF1 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V5.0.2 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
 st.caption("MK FinTECH LabGEN @2026 Istanbul | No synthetic data | Yahoo Finance daily OHLCV | Net-of-cost backtests | Educational analytics, not investment advice")
 
 engine_col1, engine_col2, engine_col3 = st.columns(3)
@@ -1810,8 +1810,8 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
-st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V5.0.2 HF4")
-st.caption("Institutional V5.0.2 HF1 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
+st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro Institutional V5.0.2")
+st.caption("Institutional V5.0.2 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
 st.caption("Cloud-stable build: Arrow-safe tables, modern Streamlit width API, TA-Lib disabled by default.")
 
 # Top KPIs
