@@ -677,13 +677,19 @@ def backtest_macd_atr_trailing(
     # FIX: do not require a fresh crossover after the selected backtest start date.
     # If the backtest starts while MACD is already bullish, the strategy may enter.
     # Otherwise many valid histories appear as if the strategy never worked.
-    entry_state = (df["MACD"] > df["MACD_SIGNAL"]).fillna(False)
-    if use_ema_filter:
-        entry_state &= (df["Close"] > df["EMA_200"]).fillna(False)
-    if use_adx_filter:
-        entry_state &= (df["ADX"] > adx_threshold).fillna(False)
+    df["Filter_Trend_Pass"] = (df["MACD"] > df["MACD_SIGNAL"]).fillna(False)
+    df["Filter_EMA200_Pass"] = ((df["Close"] > df["EMA_200"]).fillna(False) if use_ema_filter else True)
+    df["Filter_ADX_Pass"] = ((df["ADX"] > adx_threshold).fillna(False) if use_adx_filter else True)
     if market_filter is not None:
-        entry_state &= market_filter.reindex(df.index).ffill().fillna(False)
+        df["Filter_Market_Pass"] = market_filter.reindex(df.index).ffill().fillna(False)
+    else:
+        df["Filter_Market_Pass"] = True
+    entry_state = (
+        df["Filter_Trend_Pass"]
+        & df["Filter_EMA200_Pass"]
+        & df["Filter_ADX_Pass"]
+        & df["Filter_Market_Pass"]
+    )
     entry_long = entry_state
 
     exit_rule = pd.Series(False, index=df.index)
@@ -722,13 +728,19 @@ def backtest_supertrend_trailing(
     # The previous version waited only for ST_Dir to flip from non-bullish to bullish.
     # If the chosen start date occurred during an already bullish regime, Strategy_Return
     # stayed flat and the Backtest & Risk tab looked broken.
-    entry_state = (df["ST_Dir"] == 1).fillna(False)
-    if use_ema_filter:
-        entry_state &= (df["Close"] > df["EMA_200"]).fillna(False)
-    if use_adx_filter:
-        entry_state &= (df["ADX"] > adx_threshold).fillna(False)
+    df["Filter_Trend_Pass"] = (df["ST_Dir"] == 1).fillna(False)
+    df["Filter_EMA200_Pass"] = ((df["Close"] > df["EMA_200"]).fillna(False) if use_ema_filter else True)
+    df["Filter_ADX_Pass"] = ((df["ADX"] > adx_threshold).fillna(False) if use_adx_filter else True)
     if market_filter is not None:
-        entry_state &= market_filter.reindex(df.index).ffill().fillna(False)
+        df["Filter_Market_Pass"] = market_filter.reindex(df.index).ffill().fillna(False)
+    else:
+        df["Filter_Market_Pass"] = True
+    entry_state = (
+        df["Filter_Trend_Pass"]
+        & df["Filter_EMA200_Pass"]
+        & df["Filter_ADX_Pass"]
+        & df["Filter_Market_Pass"]
+    )
     entry_long = entry_state
 
     exit_rule = ((df["ST_Dir"] == -1) & (df["ST_Dir_prev"] == 1)).fillna(False)
@@ -1187,6 +1199,9 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
+st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro")
+st.caption("Institutional V3.1 — Strategy Diagnostics Enabled — No Synthetic Data")
+
 # Top KPIs
 k1, k2, k3, k4, k5, k6 = st.columns(6)
 k1.metric("Last Price", f"₺{last['Close']:.2f}")
@@ -1198,11 +1213,12 @@ k6.metric("Technical Score", f"{tech_score:.0f}/100")
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📊 Strategy Chart",
     "📋 Smart Data Table",
     "📈 Technical Signals",
     "📊 Backtest & Risk",
+    "🔎 Strategy Diagnostics",
     "🏦 Blue-Chip Universe Screener",
     "🚀 Capital Gain Leaders Lab",
     "🧮 Mini Portfolio Lab",
@@ -1220,7 +1236,7 @@ with tab1:
 # -------------------------------------------------------------------------
 with tab2:
     st.subheader("Smart Data Table — OHLCV, Signals, Risk & Rolling Beta")
-    cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Gross_Strategy_Return", "Trading_Cost", "Turnover", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
+    cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Filter_Trend_Pass", "Filter_EMA200_Pass", "Filter_ADX_Pass", "Filter_Market_Pass", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Gross_Strategy_Return", "Trading_Cost", "Turnover", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
     show = plot_data[[c for c in cols if c in plot_data.columns]].sort_index(ascending=False).copy()
     st.dataframe(style_smart_table(show.head(800)), use_container_width=True, height=620)
     csv = show.to_csv(index=True).encode("utf-8")
@@ -1319,9 +1335,86 @@ with tab4:
             st.plotly_chart(clean_fig(go.Figure(data=go.Heatmap(z=pivot.values, x=pivot.columns, y=pivot.index, colorbar=dict(title="Return %"))).update_layout(title="Return Heatmap for Best ADX Bucket"), height=500), use_container_width=True)
 
 # -------------------------------------------------------------------------
-# TAB 5: BLUE-CHIP UNIVERSE SCREENER
+# TAB 5: STRATEGY DIAGNOSTICS
 # -------------------------------------------------------------------------
 with tab5:
+    st.subheader("Strategy Diagnostics — Filter-by-Filter Constraint Analysis")
+    st.caption("Every row is calculated from real Yahoo Finance observations. Disabled filters are treated as PASS and are clearly labelled below.")
+
+    diagnostic_columns = [
+        "Filter_Trend_Pass", "Filter_EMA200_Pass", "Filter_ADX_Pass",
+        "Filter_Market_Pass", "Entry_Eligible"
+    ]
+    diag_df = plot_data[[c for c in diagnostic_columns if c in plot_data.columns]].copy()
+    total_obs = max(len(diag_df), 1)
+    labels = {
+        "Filter_Trend_Pass": "Trend condition passed",
+        "Filter_EMA200_Pass": "EMA200 filter passed",
+        "Filter_ADX_Pass": "ADX filter passed",
+        "Filter_Market_Pass": "BIST100 regime passed",
+        "Entry_Eligible": "FINAL ENTRY ELIGIBLE",
+    }
+    active_flags = {
+        "Filter_Trend_Pass": True,
+        "Filter_EMA200_Pass": bool(use_ema_macd) if strategy_choice.startswith("MACD") else bool(use_ema_filter),
+        "Filter_ADX_Pass": bool(use_adx_macd) if strategy_choice.startswith("MACD") else bool(use_adx_filter),
+        "Filter_Market_Pass": bool(use_index_filter_global),
+        "Entry_Eligible": True,
+    }
+    rows = []
+    for col in diagnostic_columns:
+        if col not in diag_df.columns:
+            continue
+        passed = int(diag_df[col].fillna(False).astype(bool).sum())
+        rows.append({
+            "Constraint": labels[col],
+            "Filter status": "ACTIVE" if active_flags[col] else "OFF (not restrictive)",
+            "Days passed": passed,
+            "Pass rate %": passed / total_obs * 100,
+            "Days blocked": total_obs - passed,
+        })
+    constraint_table = pd.DataFrame(rows)
+    st.dataframe(
+        constraint_table.style.format({"Pass rate %": "{:.2f}%"}),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    if not constraint_table.empty:
+        fig_diag = go.Figure(go.Bar(
+            x=constraint_table["Days passed"],
+            y=constraint_table["Constraint"],
+            orientation="h",
+            text=constraint_table["Pass rate %"].map(lambda x: f"{x:.1f}%"),
+            textposition="auto",
+        ))
+        fig_diag.update_layout(
+            title="Filter Funnel — Number of Trading Days Passing Each Condition",
+            template="plotly_white", height=430,
+            xaxis_title="Trading days passed", yaxis_title="",
+            margin=dict(l=20, r=20, t=60, b=20),
+        )
+        st.plotly_chart(fig_diag, use_container_width=True, theme=None)
+
+    st.markdown("#### Daily decision audit")
+    audit_cols = [
+        "Close", "EMA_200", "ADX", "ST_Dir", "MACD", "MACD_SIGNAL",
+        "Filter_Trend_Pass", "Filter_EMA200_Pass", "Filter_ADX_Pass",
+        "Filter_Market_Pass", "Entry_Eligible", "Signal", "Position"
+    ]
+    audit = plot_data[[c for c in audit_cols if c in plot_data.columns]].sort_index(ascending=False).head(500)
+    st.dataframe(style_smart_table(audit), use_container_width=True, height=600)
+
+    eligible = int(plot_data.get("Entry_Eligible", pd.Series(False, index=plot_data.index)).sum())
+    if eligible == 0:
+        st.error("FINAL ENTRY ELIGIBLE = 0. At least one active filter blocks every possible entry day. Compare the pass rates above and disable or relax the smallest active pass-rate filter first.")
+    else:
+        st.success(f"FINAL ENTRY ELIGIBLE = {eligible} trading days ({eligible / total_obs * 100:.2f}% of the test sample).")
+
+# -------------------------------------------------------------------------
+# TAB 5: BLUE-CHIP UNIVERSE SCREENER
+# -------------------------------------------------------------------------
+with tab6:
     st.subheader("Expanded BIST Blue-Chip Universe Screener")
     st.markdown("<div class='small-note'>Universe includes banks, QNB, Garanti, YKBNK, Koç Holding, Sabancı Holding, Pegasus, industrials, telecom, consumer and energy names. Calculations use real Yahoo daily data only.</div>", unsafe_allow_html=True)
     col_a, col_b, col_c = st.columns(3)
@@ -1357,7 +1450,7 @@ with tab5:
 # -------------------------------------------------------------------------
 # TAB 6: CAPITAL GAIN LEADERS LAB
 # -------------------------------------------------------------------------
-with tab6:
+with tab7:
     st.subheader("Capital Gain Leaders Lab — Separate High-Momentum Basket")
     st.markdown("<div class='risk-note'><b>No synthetic data rule:</b> the snapshot gain table is only a user-provided watchlist/metadata layer. All prices, returns, beta, volatility and signals below are recalculated from real Yahoo Finance OHLCV. If Yahoo data is missing, the stock is excluded and logged.</div>", unsafe_allow_html=True)
     cap_meta = pd.DataFrame(CAPITAL_GAIN_LEADERS)
@@ -1403,7 +1496,7 @@ with tab6:
 # -------------------------------------------------------------------------
 # TAB 7: MINI PORTFOLIO LAB
 # -------------------------------------------------------------------------
-with tab7:
+with tab8:
     st.subheader("Mini Equal-Weight Portfolio Lab vs XU100")
     source_choice = st.radio("Choose selection source", ["Manual Universe", "Top Blue-Chip Scan", "Top Capital Gain Leaders"], horizontal=True)
     if source_choice == "Manual Universe":
