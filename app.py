@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # -------------------------------------------------------------------------
-# SUPERTRENDPRO INSTITUTIONAL V2 – NO SYNTHETIC DATA
+# SUPERTRENDPRO INSTITUTIONAL V4.0 – NO SYNTHETIC DATA + LEADING SIGNAL LAB
 # Trend Following + Smart Supertrend + Beta + Risk Metrics
 # Expanded BIST Blue-Chip Universe + Capital Gain Leaders Lab
 # -------------------------------------------------------------------------
@@ -1092,10 +1092,141 @@ def style_smart_table(df: pd.DataFrame):
             sty = sty.background_gradient(subset=[c])
     return sty
 
+
+# -------------------------------------------------------------------------
+# VECTORISED LEADING SIGNAL LAB
+# Classic MA crossover method + advanced multi-confirmation signal engine.
+# Signals are generated at close and applied from the next bar to prevent
+# look-ahead bias. No synthetic data is used.
+# -------------------------------------------------------------------------
+def _signal_perf_metrics(ret: pd.Series, benchmark_ret: Optional[pd.Series] = None) -> Dict[str, float]:
+    r = pd.Series(ret).replace([np.inf, -np.inf], np.nan).dropna()
+    if r.empty:
+        return {
+            "Total Return %": np.nan, "CAGR %": np.nan, "Ann Vol %": np.nan,
+            "Sharpe": np.nan, "Sortino": np.nan, "Max Drawdown %": np.nan,
+            "Win Rate %": np.nan, "Positive Days": 0, "Active Days": 0,
+            "Beta vs XU100": np.nan, "Information Ratio": np.nan,
+        }
+    eq=(1+r).cumprod()
+    total=eq.iloc[-1]-1
+    years=max(len(r)/TRADING_DAYS, 1/TRADING_DAYS)
+    cagr=(1+total)**(1/years)-1 if total > -1 else np.nan
+    vol=r.std(ddof=1)*np.sqrt(TRADING_DAYS)
+    sharpe=(r.mean()*TRADING_DAYS/vol) if vol and np.isfinite(vol) and vol>0 else np.nan
+    downside=r[r<0].std(ddof=1)*np.sqrt(TRADING_DAYS)
+    sortino=(r.mean()*TRADING_DAYS/downside) if downside and np.isfinite(downside) and downside>0 else np.nan
+    dd=eq/eq.cummax()-1
+    active=r[r!=0]
+    beta=ir=np.nan
+    if benchmark_ret is not None:
+        pair=pd.concat([r.rename('strategy'), pd.Series(benchmark_ret).rename('benchmark')], axis=1).dropna()
+        if len(pair)>2 and pair['benchmark'].var(ddof=1)>0:
+            beta=pair['strategy'].cov(pair['benchmark'])/pair['benchmark'].var(ddof=1)
+            active_ret=pair['strategy']-pair['benchmark']
+            te=active_ret.std(ddof=1)*np.sqrt(TRADING_DAYS)
+            ir=(active_ret.mean()*TRADING_DAYS/te) if te and np.isfinite(te) and te>0 else np.nan
+    return {
+        "Total Return %": total*100, "CAGR %": cagr*100, "Ann Vol %": vol*100,
+        "Sharpe": sharpe, "Sortino": sortino, "Max Drawdown %": dd.min()*100,
+        "Win Rate %": (active.gt(0).mean()*100 if not active.empty else np.nan),
+        "Positive Days": int(active.gt(0).sum()), "Active Days": int(active.size),
+        "Beta vs XU100": beta, "Information Ratio": ir,
+    }
+
+def run_leading_signal_lab(
+    df: pd.DataFrame,
+    mode: str = "Classic SMA Crossover",
+    fast_window: int = 20,
+    slow_window: int = 50,
+    breakout_window: int = 20,
+    entry_score: int = 4,
+    exit_score: int = 2,
+    use_volume_confirmation: bool = True,
+    market_regime: Optional[pd.Series] = None,
+    benchmark_ret: Optional[pd.Series] = None,
+    transaction_cost_bps: float = 8.0,
+    slippage_bps: float = 4.0,
+) -> Tuple[pd.DataFrame, Dict[str, float]]:
+    x=df.copy().sort_index()
+    close=x['Close'].astype(float)
+    x['SMA_Fast']=close.rolling(fast_window, min_periods=fast_window).mean()
+    x['SMA_Slow']=close.rolling(slow_window, min_periods=slow_window).mean()
+    x['EMA_Fast']=close.ewm(span=fast_window, adjust=False, min_periods=fast_window).mean()
+    x['EMA_Slow']=close.ewm(span=slow_window, adjust=False, min_periods=slow_window).mean()
+    x['Prior_High']=close.rolling(breakout_window, min_periods=breakout_window).max().shift(1)
+    x['Volume_Median_20']=x['Volume'].rolling(20, min_periods=20).median()
+    x['Return_Lab']=close.pct_change().fillna(0.0)
+
+    if mode == "Classic SMA Crossover":
+        x['Trend_Pass']=x['SMA_Fast'] > x['SMA_Slow']
+        x['Breakout_Pass']=False
+        x['MACD_Pass']=False
+        x['RSI_Pass']=False
+        x['Volume_Pass']=True
+        x['Market_Pass']=True if market_regime is None else market_regime.reindex(x.index).ffill().fillna(False)
+        desired=(x['Trend_Pass'] & x['Market_Pass']).astype(int)
+        x['Signal_Score']=x['Trend_Pass'].astype(int)+x['Market_Pass'].astype(int)
+    else:
+        x['Trend_Pass']=(x['EMA_Fast'] > x['EMA_Slow']) & (close > x['EMA_Slow'])
+        x['Breakout_Pass']=close > x['Prior_High']
+        x['MACD_Pass']=(x['MACD_HIST'] > 0) & (x['MACD_HIST'] > x['MACD_HIST'].shift(1))
+        x['RSI_Pass']=(x['RSI'] >= 50) & (x['RSI'] <= 75)
+        x['Volume_Pass']=(x['Volume'] > x['Volume_Median_20']) if use_volume_confirmation else True
+        x['Market_Pass']=True if market_regime is None else market_regime.reindex(x.index).ffill().fillna(False)
+        score_cols=['Trend_Pass','Breakout_Pass','MACD_Pass','RSI_Pass','Volume_Pass','Market_Pass']
+        x['Signal_Score']=sum(x[c].astype(int) for c in score_cols)
+        state=0
+        desired_vals=[]
+        for score in x['Signal_Score'].fillna(0).astype(int):
+            if state==0 and score>=entry_score:
+                state=1
+            elif state==1 and score<=exit_score:
+                state=0
+            desired_vals.append(state)
+        desired=pd.Series(desired_vals,index=x.index,dtype=int)
+
+    x['Desired_Position']=desired.astype(int)
+    # Decision at today's close; exposure begins on the next bar.
+    x['Position_Lab']=x['Desired_Position'].shift(1).fillna(0).astype(int)
+    x['Position_Change']=x['Position_Lab'].diff().abs().fillna(x['Position_Lab'].abs())
+    one_way_cost=(transaction_cost_bps+slippage_bps)/10000.0
+    x['Trading_Cost_Lab']=x['Position_Change']*one_way_cost
+    x['Gross_Strategy_Return_Lab']=x['Position_Lab']*x['Return_Lab']
+    x['Strategy_Return_Lab']=x['Gross_Strategy_Return_Lab']-x['Trading_Cost_Lab']
+    x['BuyHold_Equity_Lab']=(1+x['Return_Lab']).cumprod()
+    x['Strategy_Equity_Lab']=(1+x['Strategy_Return_Lab']).cumprod()
+    x['Signal_Event']=np.select(
+        [x['Desired_Position'].eq(1)&x['Desired_Position'].shift(1).fillna(0).eq(0),
+         x['Desired_Position'].eq(0)&x['Desired_Position'].shift(1).fillna(0).eq(1)],
+        ['AL','SAT'], default='')
+    x['Leading_Action']=np.where(x['Signal_Event'].ne(''),x['Signal_Event'],np.where(x['Desired_Position'].eq(1),'TUT','BEKLE'))
+    metrics=_signal_perf_metrics(x['Strategy_Return_Lab'], benchmark_ret)
+    metrics['Signal Count']=int(x['Signal_Event'].isin(['AL','SAT']).sum())
+    metrics['Buy Signals']=int(x['Signal_Event'].eq('AL').sum())
+    metrics['Sell Signals']=int(x['Signal_Event'].eq('SAT').sum())
+    metrics['Exposure %']=float(x['Position_Lab'].mean()*100)
+    return x,metrics
+
+def leading_signal_chart(df: pd.DataFrame, title: str) -> go.Figure:
+    fig=make_subplots(rows=3,cols=1,shared_xaxes=True,vertical_spacing=0.04,row_heights=[0.52,0.23,0.25],subplot_titles=("Price, Averages and Signal Events","Signal Confirmation Score","Strategy vs Buy & Hold"))
+    fig.add_trace(go.Scatter(x=df.index,y=df['Close'],mode='lines',name='Close'),row=1,col=1)
+    for col,name in [('SMA_Fast','Fast SMA'),('SMA_Slow','Slow SMA'),('EMA_Fast','Fast EMA'),('EMA_Slow','Slow EMA')]:
+        if col in df.columns:
+            fig.add_trace(go.Scatter(x=df.index,y=df[col],mode='lines',name=name,line=dict(width=1.1)),row=1,col=1)
+    buys=df[df['Signal_Event']=='AL']; sells=df[df['Signal_Event']=='SAT']
+    fig.add_trace(go.Scatter(x=buys.index,y=buys['Close'],mode='markers',name='AL',marker=dict(symbol='triangle-up',size=12)),row=1,col=1)
+    fig.add_trace(go.Scatter(x=sells.index,y=sells['Close'],mode='markers',name='SAT',marker=dict(symbol='triangle-down',size=12)),row=1,col=1)
+    fig.add_trace(go.Bar(x=df.index,y=df['Signal_Score'],name='Confirmation Score'),row=2,col=1)
+    fig.add_trace(go.Scatter(x=df.index,y=df['Strategy_Equity_Lab'],mode='lines',name='Signal Strategy'),row=3,col=1)
+    fig.add_trace(go.Scatter(x=df.index,y=df['BuyHold_Equity_Lab'],mode='lines',name='Buy & Hold'),row=3,col=1)
+    fig.update_layout(title=title,hovermode='x unified',height=900,template='plotly_white',margin=dict(l=20,r=20,t=60,b=20))
+    return fig
+
 # -------------------------------------------------------------------------
 # SIDEBAR
 # -------------------------------------------------------------------------
-st.sidebar.title("📊 BIST PRO Scanner")
+st.sidebar.title("📊 SupertrendPro V4.0")
 st.sidebar.caption("Real Yahoo Finance daily data only. No synthetic price series, no proxy fallback.")
 
 selected_category = st.sidebar.selectbox("Select Sector / Category:", list(MARKET_DATA.keys()), index=2)
@@ -1140,7 +1271,7 @@ else:
 # -------------------------------------------------------------------------
 # MAIN DATA LOAD
 # -------------------------------------------------------------------------
-st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V2 — Trend, Execution Audit, Risk & Capital Gain Leaders</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V4.0 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
 st.caption("MK FinTECH LabGEN @2026 Istanbul | No synthetic data | Yahoo Finance daily OHLCV | Net-of-cost backtests | Educational analytics, not investment advice")
 
 if not TALIB_AVAILABLE:
@@ -1201,8 +1332,8 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
-st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro")
-st.caption("Institutional V3.1 — Strategy Diagnostics Enabled — No Synthetic Data")
+st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V4.0")
+st.caption("Institutional V4.0 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
 
 # Top KPIs
 k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -1215,7 +1346,7 @@ k6.metric("Technical Score", f"{tech_score:.0f}/100")
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "📊 Strategy Chart",
     "📋 Smart Data Table",
     "📈 Technical Signals",
@@ -1224,6 +1355,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🏦 Blue-Chip Universe Screener",
     "🚀 Capital Gain Leaders Lab",
     "🧮 Mini Portfolio Lab",
+    "🚦 Leading AL/SAT Signal Lab",
 ])
 
 # -------------------------------------------------------------------------
@@ -1558,3 +1690,56 @@ with tab8:
             st.dataframe(style_smart_table(comp), use_container_width=True)
             st.plotly_chart(corr_heatmap(portfolio["corr"], "Portfolio Component Correlation Matrix"), use_container_width=True, theme=None)
 
+
+
+# -------------------------------------------------------------------------
+# TAB 9: LEADING AL/SAT SIGNAL LAB
+# -------------------------------------------------------------------------
+with tab9:
+    st.subheader("Leading AL/SAT Signal Lab — Vectorised Backtest Without Zipline")
+    st.markdown(
+        "<div class='ok-note'><b>Methodology:</b> The classic mode reproduces the transparent moving-average crossover approach used as a practical alternative to Zipline. The advanced mode adds trend, prior-high breakout, MACD acceleration, RSI regime, volume and optional XU100 regime confirmation. All decisions are generated at the close and applied from the next trading bar, preventing look-ahead bias.</div>",
+        unsafe_allow_html=True,
+    )
+    c1,c2,c3,c4=st.columns(4)
+    signal_mode=c1.selectbox("Signal Method",["Classic SMA Crossover","Advanced Multi-Confirmation"],index=1,key="lead_mode")
+    lead_fast=c2.slider("Fast Window",5,80,20,1,key="lead_fast")
+    lead_slow=c3.slider("Slow Window",20,250,60,5,key="lead_slow")
+    lead_breakout=c4.slider("Breakout Lookback",10,100,20,5,key="lead_breakout")
+    if lead_fast>=lead_slow:
+        st.error("Fast Window must be smaller than Slow Window.")
+    else:
+        d1,d2,d3,d4=st.columns(4)
+        lead_entry=d1.slider("Advanced Entry Score",2,6,4,1,key="lead_entry",disabled=(signal_mode=="Classic SMA Crossover"))
+        lead_exit=d2.slider("Advanced Exit Score",0,5,2,1,key="lead_exit",disabled=(signal_mode=="Classic SMA Crossover"))
+        lead_volume=d3.checkbox("Use Volume Confirmation",True,key="lead_volume",disabled=(signal_mode=="Classic SMA Crossover"))
+        lead_market=d4.checkbox("Use XU100 Regime Confirmation",False,key="lead_market")
+        if lead_entry<=lead_exit and signal_mode=="Advanced Multi-Confirmation":
+            st.warning("Entry Score should normally be greater than Exit Score to avoid excessive switching.")
+        lab_df,lab_metrics=run_leading_signal_lab(
+            plot_data,mode=signal_mode,fast_window=lead_fast,slow_window=lead_slow,
+            breakout_window=lead_breakout,entry_score=lead_entry,exit_score=lead_exit,
+            use_volume_confirmation=lead_volume,
+            market_regime=(index_regime if lead_market else None),benchmark_ret=index_returns,
+            transaction_cost_bps=transaction_cost_bps,slippage_bps=slippage_bps,
+        )
+        latest_action=str(lab_df['Leading_Action'].iloc[-1])
+        latest_event=str(lab_df['Signal_Event'].iloc[-1]) or "No new event"
+        latest_score=float(lab_df['Signal_Score'].iloc[-1])
+        k1,k2,k3,k4,k5=st.columns(5)
+        k1.metric("Current Leading Action",latest_action)
+        k2.metric("Latest Event",latest_event)
+        k3.metric("Confirmation Score",f"{latest_score:.0f}")
+        k4.metric("Strategy CAGR",f"{lab_metrics.get('CAGR %',np.nan):.2f}%")
+        k5.metric("Strategy MaxDD",f"{lab_metrics.get('Max Drawdown %',np.nan):.2f}%")
+        st.plotly_chart(leading_signal_chart(lab_df,f"{selected_asset_name} ({ticker_symbol}) — {signal_mode}"),use_container_width=True,theme=None)
+        st.markdown("#### Signal Strategy Performance")
+        metric_order=['Total Return %','CAGR %','Ann Vol %','Sharpe','Sortino','Max Drawdown %','Win Rate %','Beta vs XU100','Information Ratio','Exposure %','Signal Count','Buy Signals','Sell Signals']
+        metric_df=pd.DataFrame([{'Metric':m,'Value':lab_metrics.get(m,np.nan)} for m in metric_order])
+        st.dataframe(style_smart_table(metric_df),use_container_width=True,hide_index=True)
+        st.markdown("#### Latest Signal Decisions and Confirmations")
+        lead_cols=['Close','SMA_Fast','SMA_Slow','EMA_Fast','EMA_Slow','RSI','MACD_HIST','Volume','Trend_Pass','Breakout_Pass','MACD_Pass','RSI_Pass','Volume_Pass','Market_Pass','Signal_Score','Signal_Event','Leading_Action','Position_Lab','Strategy_Return_Lab']
+        lead_show=lab_df[[c for c in lead_cols if c in lab_df.columns]].tail(250).sort_index(ascending=False)
+        st.dataframe(style_smart_table(lead_show),use_container_width=True,height=620)
+        st.download_button("Download Leading Signal Lab CSV",lab_df.to_csv(index=True).encode('utf-8'),file_name=f"{ticker_symbol.replace('.','_')}_leading_signal_lab.csv",mime='text/csv')
+        st.caption("AL/SAT outputs are model signals, not guaranteed forecasts or investment advice. Their consistency must be judged through out-of-sample testing, turnover, drawdown and stability across parameter ranges.")
