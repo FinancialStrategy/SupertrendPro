@@ -60,7 +60,8 @@ st.markdown(
       .risk-note {background:#fff7ed; border:1px solid #fed7aa; padding:12px 14px; border-radius:12px; color:#7c2d12;}
       .ok-note {background:#ecfdf3; border:1px solid #abefc6; padding:12px 14px; border-radius:12px; color:#054f31;}
       .mk-title {font-weight: 700; letter-spacing: -0.02em;}
-    </style>
+    .mk-section-title{font-size:1.55rem;font-weight:500;margin:0.35rem 0 0.15rem 0;}
+</style>
     """,
     unsafe_allow_html=True,
 )
@@ -1138,8 +1139,9 @@ else:
 # -------------------------------------------------------------------------
 # MAIN DATA LOAD
 # -------------------------------------------------------------------------
-st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V2 — Trend, Execution Audit, Risk & Capital Gain Leaders</h1>", unsafe_allow_html=True)
-st.caption("MK FinTECH LabGEN @2026 Istanbul | No synthetic data | Yahoo Finance daily OHLCV | Net-of-cost backtests | Educational analytics, not investment advice")
+st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V3.2</h1>", unsafe_allow_html=True)
+st.caption("Trend Analysis • Strategy Backtesting • Risk Analytics • BIST Screening • Portfolio Lab")
+st.caption("MK FinTECH LabGEN @2026 Istanbul | Real Yahoo Finance Daily OHLCV | No Synthetic Data | Net-of-Cost Backtests | Not Investment Advice")
 
 if not TALIB_AVAILABLE:
     st.info("TA-Lib is not installed. The app is using internal pandas/numpy indicator formulas. Price data still comes only from Yahoo Finance.")
@@ -1199,8 +1201,8 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
-st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro")
-st.caption("Institutional V3.1 — Strategy Diagnostics Enabled — No Synthetic Data")
+st.markdown(f"<h2 class='mk-section-title'>Selected Instrument: {selected_asset_name} ({ticker_symbol})</h2>", unsafe_allow_html=True)
+st.caption("Institutional V3.2 | Strategy Diagnostics Enabled | No Synthetic Data")
 
 # Top KPIs
 k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -1214,14 +1216,14 @@ k6.metric("Technical Score", f"{tech_score:.0f}/100")
 st.markdown("---")
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "📊 Strategy Chart",
-    "📋 Smart Data Table",
-    "📈 Technical Signals",
-    "📊 Backtest & Risk",
-    "🔎 Strategy Diagnostics",
-    "🏦 Blue-Chip Universe Screener",
-    "🚀 Capital Gain Leaders Lab",
-    "🧮 Mini Portfolio Lab",
+    "📊 Strategy & Signal Chart",
+    "📋 Smart Market Data",
+    "📈 Technical Indicator Dashboard",
+    "📊 Backtest & Risk Analytics",
+    "🔎 Strategy Filter Diagnostics",
+    "🏦 BIST Blue-Chip Screener",
+    "🚀 Capital Gain Leaders",
+    "🧮 Equal-Weight Portfolio Lab",
 ])
 
 # -------------------------------------------------------------------------
@@ -1235,7 +1237,7 @@ with tab1:
 # TAB 2
 # -------------------------------------------------------------------------
 with tab2:
-    st.subheader("Smart Data Table — OHLCV, Signals, Risk & Rolling Beta")
+    st.subheader("Smart Market Data — OHLCV, Signals, Filters, Risk and Rolling Beta")
     cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Filter_Trend_Pass", "Filter_EMA200_Pass", "Filter_ADX_Pass", "Filter_Market_Pass", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Gross_Strategy_Return", "Trading_Cost", "Turnover", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
     show = plot_data[[c for c in cols if c in plot_data.columns]].sort_index(ascending=False).copy()
     st.dataframe(style_smart_table(show.head(800)), use_container_width=True, height=620)
@@ -1249,7 +1251,7 @@ with tab2:
 # TAB 3
 # -------------------------------------------------------------------------
 with tab3:
-    st.subheader("Technical Signals — Candlestick, Bollinger Bands, Supertrend, RSI/MACD")
+    st.subheader("Technical Indicator Dashboard — Candlestick, Bollinger Bands, Supertrend, MACD and RSI")
     ts = plot_data.copy()
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.58, 0.22, 0.20], subplot_titles=("Candlestick + Bollinger + EMA + Supertrend", "MACD", "RSI"))
     fig.add_trace(go.Candlestick(x=ts.index, open=ts["Open"], high=ts["High"], low=ts["Low"], close=ts["Close"], name="OHLC"), row=1, col=1)
@@ -1268,7 +1270,7 @@ with tab3:
 # TAB 4
 # -------------------------------------------------------------------------
 with tab4:
-    st.subheader("Backtest, Beta & Institutional Risk Metrics")
+    st.subheader("Backtest Performance and Institutional Risk Analytics")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Strategy CAGR", f"{stats.get('strat_annual_pct', np.nan):.2f}%")
     c2.metric("Sharpe / Sortino", f"{stats.get('sharpe', np.nan):.2f} / {stats.get('sortino', np.nan):.2f}")
@@ -1302,7 +1304,7 @@ with tab4:
         {"Check": "Non-zero net returns", "Value": int((plot_data['Strategy_Return'].abs() > 1e-12).sum()), "Status": "PASS" if (plot_data['Strategy_Return'].abs() > 1e-12).any() else "FAIL"},
         {"Check": "Benchmark alignment", "Value": int(index_returns.reindex(plot_data.index).notna().sum()) if index_returns is not None else 0, "Status": "PASS" if index_returns is not None and index_returns.reindex(plot_data.index).notna().sum() >= 60 else "REVIEW"},
     ]
-    st.markdown("#### Strategy Execution Audit")
+    st.markdown("#### Strategy Execution Summary")
     st.dataframe(pd.DataFrame(diagnostic_rows), use_container_width=True, hide_index=True)
 
     if stats.get('buy_signal_count', 0) == 0 and stats.get('entry_eligible_days', 0) == 0:
@@ -1317,7 +1319,7 @@ with tab4:
 
     if strategy_choice == "Smart Supertrend + Optimizer":
         st.markdown("---")
-        st.subheader("Smart Supertrend Recent-Window Optimization")
+        st.subheader("Smart Supertrend Parameter Optimization")
         opt_window = st.slider("Optimization Window Days", 90, 540, 180, 30)
         if st.button("Run Optimization Grid"):
             rows = []
@@ -1338,7 +1340,7 @@ with tab4:
 # TAB 5: STRATEGY DIAGNOSTICS
 # -------------------------------------------------------------------------
 with tab5:
-    st.subheader("Strategy Diagnostics — Filter-by-Filter Constraint Analysis")
+    st.subheader("Strategy Filter Diagnostics — Constraint Analysis")
     st.caption("Every row is calculated from real Yahoo Finance observations. Disabled filters are treated as PASS and are clearly labelled below.")
 
     diagnostic_columns = [
@@ -1396,7 +1398,7 @@ with tab5:
         )
         st.plotly_chart(fig_diag, use_container_width=True, theme=None)
 
-    st.markdown("#### Daily decision audit")
+    st.markdown("#### Daily Strategy Decision Audit")
     audit_cols = [
         "Close", "EMA_200", "ADX", "ST_Dir", "MACD", "MACD_SIGNAL",
         "Filter_Trend_Pass", "Filter_EMA200_Pass", "Filter_ADX_Pass",
@@ -1415,7 +1417,7 @@ with tab5:
 # TAB 5: BLUE-CHIP UNIVERSE SCREENER
 # -------------------------------------------------------------------------
 with tab6:
-    st.subheader("Expanded BIST Blue-Chip Universe Screener")
+    st.subheader("BIST Blue-Chip Universe Screener")
     st.markdown("<div class='small-note'>Universe includes banks, QNB, Garanti, YKBNK, Koç Holding, Sabancı Holding, Pegasus, industrials, telecom, consumer and energy names. Calculations use real Yahoo daily data only.</div>", unsafe_allow_html=True)
     col_a, col_b, col_c = st.columns(3)
     min_obs_scan = col_a.slider("Minimum valid observations", 60, 756, 180, 30, key="blue_min_obs")
@@ -1448,13 +1450,13 @@ with tab6:
             st.dataframe(excluded_df, use_container_width=True)
 
 # -------------------------------------------------------------------------
-# TAB 6: CAPITAL GAIN LEADERS LAB
+# TAB 7: CAPITAL GAIN LEADERS
 # -------------------------------------------------------------------------
 with tab7:
-    st.subheader("Capital Gain Leaders Lab — Separate High-Momentum Basket")
+    st.subheader("Capital Gain Leaders — High-Momentum Watchlist and Analytics")
     st.markdown("<div class='risk-note'><b>No synthetic data rule:</b> the snapshot gain table is only a user-provided watchlist/metadata layer. All prices, returns, beta, volatility and signals below are recalculated from real Yahoo Finance OHLCV. If Yahoo data is missing, the stock is excluded and logged.</div>", unsafe_allow_html=True)
     cap_meta = pd.DataFrame(CAPITAL_GAIN_LEADERS)
-    st.markdown("#### User-Provided Snapshot Watchlist")
+    st.markdown("#### User-Provided Capital Gain Snapshot")
     st.dataframe(style_smart_table(cap_meta), use_container_width=True, height=320)
 
     col1, col2, col3 = st.columns(3)
@@ -1478,7 +1480,7 @@ with tab7:
     cap_df = st.session_state.get("cap_df", pd.DataFrame())
     if cap_df is not None and not cap_df.empty:
         show_cols = ["Name", "Symbol", "Action Lens", "Composite Score", "SnapshotGainPct", "SnapshotTarget", "Rating", "Last Close", "RSI", "ADX", "3M Momentum %", "6M Momentum %", "1Y Momentum %", "From 52W High %", "ATR %", "Ann Vol %", "Sharpe", "Max Drawdown %", "Beta vs XU100", "VaR 95% %", "Avg Daily TL Volume", "Signal Drivers"]
-        st.markdown("#### Capital Gain Leaders — Smart Ranking")
+        st.markdown("#### Capital Gain Leaders — Composite Ranking")
         st.dataframe(style_smart_table(cap_df[[c for c in show_cols if c in cap_df.columns]].head(cap_top_n)), use_container_width=True, height=650)
         c1, c2, c3 = st.columns(3)
         top = cap_df.iloc[0]
@@ -1494,10 +1496,10 @@ with tab7:
             st.dataframe(cap_excl, use_container_width=True)
 
 # -------------------------------------------------------------------------
-# TAB 7: MINI PORTFOLIO LAB
+# TAB 8: EQUAL-WEIGHT PORTFOLIO LAB
 # -------------------------------------------------------------------------
 with tab8:
-    st.subheader("Mini Equal-Weight Portfolio Lab vs XU100")
+    st.subheader("Equal-Weight Portfolio Lab vs BIST 100")
     source_choice = st.radio("Choose selection source", ["Manual Universe", "Top Blue-Chip Scan", "Top Capital Gain Leaders"], horizontal=True)
     if source_choice == "Manual Universe":
         all_names = list(UNIVERSE_STOCKS.keys())
@@ -1548,11 +1550,18 @@ with tab8:
             fig.update_layout(title="Mini Portfolio Equity Curve vs XU100", yaxis_title="Normalized Equity")
             st.plotly_chart(clean_fig(fig, height=560), use_container_width=True, theme=None)
 
-            st.markdown("#### Portfolio vs Benchmark Metrics")
+            st.markdown("#### Portfolio and Benchmark Metrics")
             st.dataframe(style_smart_table(pd.DataFrame([pmet, imet])), use_container_width=True)
-            st.markdown("#### Component Total Returns")
+            st.markdown("#### Portfolio Component Total Returns")
             comp = portfolio["asset_total_ret"].mul(100).sort_values(ascending=False).reset_index()
             comp.columns = ["Symbol", "Total Return %"]
             st.dataframe(style_smart_table(comp), use_container_width=True)
             st.plotly_chart(corr_heatmap(portfolio["corr"], "Portfolio Component Correlation Matrix"), use_container_width=True, theme=None)
 
+
+
+# -------------------------------------------------------------------------
+# FOOTER
+# -------------------------------------------------------------------------
+st.markdown("---")
+st.caption("SupertrendPro Institutional V3.2 • MK FinTECH LabGEN @2026 Istanbul • No Synthetic Data • Not Investment Advice")
