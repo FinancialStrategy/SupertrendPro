@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # -------------------------------------------------------------------------
-# SUPERTRENDPRO INSTITUTIONAL V4.0 – NO SYNTHETIC DATA + LEADING SIGNAL LAB
+# SUPERTRENDPRO INSTITUTIONAL V4.1 – NO SYNTHETIC DATA + LEADING SIGNAL LAB
 # Trend Following + Smart Supertrend + Beta + Risk Metrics
 # Expanded BIST Blue-Chip Universe + Capital Gain Leaders Lab
 # -------------------------------------------------------------------------
@@ -11,6 +11,8 @@
 
 import warnings
 warnings.filterwarnings("ignore")
+
+import os
 
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -28,10 +30,17 @@ import itertools
 # OPTIONAL TA-LIB: the app runs even if TA-Lib is not installed.
 # No synthetic prices are ever generated; only indicator formulas fall back.
 # -------------------------------------------------------------------------
-try:
-    import talib as ta
-    TALIB_AVAILABLE = True
-except Exception:
+# TA-Lib is opt-in because native TA-Lib wheels can cause segmentation faults
+# on some Streamlit Cloud images. Internal pandas/numpy formulas are the default.
+ENABLE_TALIB = os.getenv("SUPERTRENDPRO_ENABLE_TALIB", "0") == "1"
+if ENABLE_TALIB:
+    try:
+        import talib as ta
+        TALIB_AVAILABLE = True
+    except Exception:
+        ta = None
+        TALIB_AVAILABLE = False
+else:
     ta = None
     TALIB_AVAILABLE = False
 
@@ -40,12 +49,12 @@ ROLLING_BETA_WINDOW = 60
 ROLLING_VOL_WINDOW = 63
 MIN_PRICE_OBS = 120
 BENCHMARK_SYMBOL = "XU100.IS"
-APP_VERSION = "4.0"
-APP_RELEASE_NAME = "SupertrendPro Institutional V4.0"
+APP_VERSION = "4.1"
+APP_RELEASE_NAME = "SupertrendPro Institutional V4.1"
 
 st.set_page_config(
     layout="wide",
-    page_title="SupertrendPro Institutional V4.0",
+    page_title="SupertrendPro Institutional V4.1",
     initial_sidebar_state="expanded",
 )
 
@@ -1226,7 +1235,7 @@ def leading_signal_chart(df: pd.DataFrame, title: str) -> go.Figure:
 # -------------------------------------------------------------------------
 # SIDEBAR
 # -------------------------------------------------------------------------
-st.sidebar.title("📊 SupertrendPro V4.0")
+st.sidebar.title("📊 SupertrendPro V4.1")
 st.sidebar.caption("Real Yahoo Finance daily data only. No synthetic price series, no proxy fallback.")
 
 selected_category = st.sidebar.selectbox("Select Sector / Category:", list(MARKET_DATA.keys()), index=2)
@@ -1271,7 +1280,7 @@ else:
 # -------------------------------------------------------------------------
 # MAIN DATA LOAD
 # -------------------------------------------------------------------------
-st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V4.0 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V4.1 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
 st.caption("MK FinTECH LabGEN @2026 Istanbul | No synthetic data | Yahoo Finance daily OHLCV | Net-of-cost backtests | Educational analytics, not investment advice")
 
 if not TALIB_AVAILABLE:
@@ -1332,8 +1341,9 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
-st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V4.0")
-st.caption("Institutional V4.0 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
+st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro V4.1")
+st.caption("Institutional V4.1 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
+st.caption("Cloud-stable build: Arrow-safe tables, modern Streamlit width API, TA-Lib disabled by default.")
 
 # Top KPIs
 k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -1362,7 +1372,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
 # TAB 1
 # -------------------------------------------------------------------------
 with tab1:
-    st.plotly_chart(strategy_chart(plot_data, f"{selected_asset_name} ({ticker_symbol}) — {strategy_choice}"), use_container_width=True, theme=None)
+    st.plotly_chart(strategy_chart(plot_data, f"{selected_asset_name} ({ticker_symbol}) — {strategy_choice}"), width="stretch", theme=None)
     st.markdown(f"<div class='ok-note'><b>Signal Drivers:</b> {tech_reasons or 'No strong technical driver detected.'}</div>", unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
@@ -1372,12 +1382,12 @@ with tab2:
     st.subheader("Smart Data Table — OHLCV, Signals, Risk & Rolling Beta")
     cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Filter_Trend_Pass", "Filter_EMA200_Pass", "Filter_ADX_Pass", "Filter_Market_Pass", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Gross_Strategy_Return", "Trading_Cost", "Turnover", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
     show = plot_data[[c for c in cols if c in plot_data.columns]].sort_index(ascending=False).copy()
-    st.dataframe(style_smart_table(show.head(800)), use_container_width=True, height=620)
+    st.dataframe(style_smart_table(show.head(800)), width="stretch", height=620)
     csv = show.to_csv(index=True).encode("utf-8")
     st.download_button("Download current asset table as CSV", csv, file_name=f"{ticker_symbol.replace('.','_')}_smart_table.csv", mime="text/csv")
     if not trades_df.empty:
         st.subheader("Trade Log")
-        st.dataframe(style_smart_table(trades_df.sort_values("EntryDate", ascending=False)), use_container_width=True)
+        st.dataframe(style_smart_table(trades_df.sort_values("EntryDate", ascending=False)), width="stretch")
 
 # -------------------------------------------------------------------------
 # TAB 3
@@ -1396,7 +1406,7 @@ with tab3:
     fig.add_trace(go.Scatter(x=ts.index, y=ts["RSI"], name="RSI", mode="lines"), row=3, col=1)
     fig.add_hrect(y0=70, y1=100, opacity=0.08, line_width=0, row=3, col=1)
     fig.add_hrect(y0=0, y1=30, opacity=0.08, line_width=0, row=3, col=1)
-    st.plotly_chart(clean_fig(fig, height=900), use_container_width=True, theme=None)
+    st.plotly_chart(clean_fig(fig, height=900), width="stretch", theme=None)
 
 # -------------------------------------------------------------------------
 # TAB 4
@@ -1428,26 +1438,27 @@ with tab4:
     total_cost_pct = plot_data.get("Trading_Cost", pd.Series(0.0, index=plot_data.index)).sum() * 100
     e4.metric("Cumulative Trading Costs", f"{total_cost_pct:.2f}%")
 
+    benchmark_aligned_obs = int(index_returns.reindex(plot_data.index).notna().sum()) if index_returns is not None else 0
     diagnostic_rows = [
-        {"Check": "Valid observations", "Value": len(plot_data), "Status": "PASS" if len(plot_data) >= 120 else "REVIEW"},
-        {"Check": "Entry-eligible days", "Value": stats.get('entry_eligible_days', 0), "Status": "PASS" if stats.get('entry_eligible_days', 0) > 0 else "FAIL"},
-        {"Check": "Buy signals", "Value": stats.get('buy_signal_count', 0), "Status": "PASS" if stats.get('buy_signal_count', 0) > 0 else "FAIL"},
+        {"Check": "Valid observations", "Value": f"{len(plot_data):,}", "Status": "PASS" if len(plot_data) >= 120 else "REVIEW"},
+        {"Check": "Entry-eligible days", "Value": f"{int(stats.get('entry_eligible_days', 0)):,}", "Status": "PASS" if stats.get('entry_eligible_days', 0) > 0 else "FAIL"},
+        {"Check": "Buy signals", "Value": f"{int(stats.get('buy_signal_count', 0)):,}", "Status": "PASS" if stats.get('buy_signal_count', 0) > 0 else "FAIL"},
         {"Check": "Market exposure", "Value": f"{stats.get('exposure_pct', np.nan):.1f}%", "Status": "PASS" if stats.get('exposure_pct', 0) > 0 else "FAIL"},
-        {"Check": "Non-zero net returns", "Value": int((plot_data['Strategy_Return'].abs() > 1e-12).sum()), "Status": "PASS" if (plot_data['Strategy_Return'].abs() > 1e-12).any() else "FAIL"},
-        {"Check": "Benchmark alignment", "Value": int(index_returns.reindex(plot_data.index).notna().sum()) if index_returns is not None else 0, "Status": "PASS" if index_returns is not None and index_returns.reindex(plot_data.index).notna().sum() >= 60 else "REVIEW"},
+        {"Check": "Non-zero net returns", "Value": f"{int((plot_data['Strategy_Return'].abs() > 1e-12).sum()):,}", "Status": "PASS" if (plot_data['Strategy_Return'].abs() > 1e-12).any() else "FAIL"},
+        {"Check": "Benchmark alignment", "Value": f"{benchmark_aligned_obs:,}", "Status": "PASS" if benchmark_aligned_obs >= 60 else "REVIEW"},
     ]
     st.markdown("#### Strategy Execution Audit")
-    st.dataframe(pd.DataFrame(diagnostic_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(diagnostic_rows), width="stretch", hide_index=True)
 
     if stats.get('buy_signal_count', 0) == 0 and stats.get('entry_eligible_days', 0) == 0:
         st.warning("Strategy produced no eligible entry days under the current filters. Try disabling EMA200, ADX, or BIST100 regime filter, or use a longer backtest window.")
     elif stats.get('trade_count', 0) == 0 and stats.get('active_position_now', False):
         st.info("The strategy is active but has not closed a trade yet in the selected window. Closed-trade statistics will remain zero until an exit occurs.")
 
-    st.plotly_chart(equity_risk_chart(plot_data), use_container_width=True, theme=None)
+    st.plotly_chart(equity_risk_chart(plot_data), width="stretch", theme=None)
 
     risk_table = pd.DataFrame([compute_return_metrics(plot_data["Return"], index_returns, "Buy & Hold"), compute_return_metrics(plot_data["Strategy_Return"], index_returns, "Strategy")])
-    st.dataframe(style_smart_table(risk_table), use_container_width=True)
+    st.dataframe(style_smart_table(risk_table), width="stretch")
 
     if strategy_choice == "Smart Supertrend + Optimizer":
         st.markdown("---")
@@ -1464,9 +1475,9 @@ with tab4:
                 prog.progress((i + 1) / len(combos))
             prog.empty()
             opt_df = pd.DataFrame(rows).sort_values(["Sharpe", "Return %"], ascending=False)
-            st.dataframe(style_smart_table(opt_df.head(30)), use_container_width=True)
+            st.dataframe(style_smart_table(opt_df.head(30)), width="stretch")
             pivot = opt_df[opt_df["ADX"] == opt_df.iloc[0]["ADX"]].pivot_table(index="Period", columns="Multiplier", values="Return %", aggfunc="mean")
-            st.plotly_chart(clean_fig(go.Figure(data=go.Heatmap(z=pivot.values, x=pivot.columns, y=pivot.index, colorbar=dict(title="Return %"))).update_layout(title="Return Heatmap for Best ADX Bucket"), height=500), use_container_width=True)
+            st.plotly_chart(clean_fig(go.Figure(data=go.Heatmap(z=pivot.values, x=pivot.columns, y=pivot.index, colorbar=dict(title="Return %"))).update_layout(title="Return Heatmap for Best ADX Bucket"), height=500), width="stretch")
 
 # -------------------------------------------------------------------------
 # TAB 5: STRATEGY DIAGNOSTICS
@@ -1510,7 +1521,7 @@ with tab5:
     constraint_table = pd.DataFrame(rows)
     st.dataframe(
         constraint_table.style.format({"Pass rate %": "{:.2f}%"}),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -1528,7 +1539,7 @@ with tab5:
             xaxis_title="Trading days passed", yaxis_title="",
             margin=dict(l=20, r=20, t=60, b=20),
         )
-        st.plotly_chart(fig_diag, use_container_width=True, theme=None)
+        st.plotly_chart(fig_diag, width="stretch", theme=None)
 
     st.markdown("#### Daily decision audit")
     audit_cols = [
@@ -1537,7 +1548,7 @@ with tab5:
         "Filter_Market_Pass", "Entry_Eligible", "Signal", "Position"
     ]
     audit = plot_data[[c for c in audit_cols if c in plot_data.columns]].sort_index(ascending=False).head(500)
-    st.dataframe(style_smart_table(audit), use_container_width=True, height=600)
+    st.dataframe(style_smart_table(audit), width="stretch", height=600)
 
     eligible = int(plot_data.get("Entry_Eligible", pd.Series(False, index=plot_data.index)).sum())
     if eligible == 0:
@@ -1572,14 +1583,14 @@ with tab6:
     if scan_df is not None and not scan_df.empty:
         st.success(f"Scan complete: {len(scan_df)} valid names. Excluded names are listed below, if any.")
         show_cols = ["Name", "Symbol", "Action Lens", "Composite Score", "Technical Score", "Last Close", "RSI", "ADX", "3M Momentum %", "6M Momentum %", "CAGR %", "Ann Vol %", "Sharpe", "Max Drawdown %", "Beta vs XU100", "Avg Daily TL Volume", "Signal Drivers"]
-        st.dataframe(style_smart_table(scan_df[[c for c in show_cols if c in scan_df.columns]].head(scan_limit)), use_container_width=True, height=620)
-        st.plotly_chart(risk_return_bubble(scan_df, "Blue-Chip Risk / Return / Liquidity Map"), use_container_width=True, theme=None)
-        st.plotly_chart(momentum_bar(scan_df, "Top Blue-Chip Momentum Profile", n=min(20, len(scan_df))), use_container_width=True, theme=None)
+        st.dataframe(style_smart_table(scan_df[[c for c in show_cols if c in scan_df.columns]].head(scan_limit)), width="stretch", height=620)
+        st.plotly_chart(risk_return_bubble(scan_df, "Blue-Chip Risk / Return / Liquidity Map"), width="stretch", theme=None)
+        st.plotly_chart(momentum_bar(scan_df, "Top Blue-Chip Momentum Profile", n=min(20, len(scan_df))), width="stretch", theme=None)
         st.download_button("Download blue-chip screener CSV", scan_df.to_csv(index=False).encode("utf-8"), "bist_blue_chip_screener.csv", "text/csv")
     excluded_df = st.session_state.get("blue_excluded_df", pd.DataFrame())
     if excluded_df is not None and not excluded_df.empty:
         with st.expander("Data Quality / Exclusion Log"):
-            st.dataframe(excluded_df, use_container_width=True)
+            st.dataframe(excluded_df, width="stretch")
 
 # -------------------------------------------------------------------------
 # TAB 6: CAPITAL GAIN LEADERS LAB
@@ -1589,7 +1600,7 @@ with tab7:
     st.markdown("<div class='risk-note'><b>No synthetic data rule:</b> the snapshot gain table is only a user-provided watchlist/metadata layer. All prices, returns, beta, volatility and signals below are recalculated from real Yahoo Finance OHLCV. If Yahoo data is missing, the stock is excluded and logged.</div>", unsafe_allow_html=True)
     cap_meta = pd.DataFrame(CAPITAL_GAIN_LEADERS)
     st.markdown("#### User-Provided Snapshot Watchlist")
-    st.dataframe(style_smart_table(cap_meta), use_container_width=True, height=320)
+    st.dataframe(style_smart_table(cap_meta), width="stretch", height=320)
 
     col1, col2, col3 = st.columns(3)
     min_obs_cap = col1.slider("Minimum valid observations", 40, 756, 120, 20, key="cap_min_obs")
@@ -1613,19 +1624,19 @@ with tab7:
     if cap_df is not None and not cap_df.empty:
         show_cols = ["Name", "Symbol", "Action Lens", "Composite Score", "SnapshotGainPct", "SnapshotTarget", "Rating", "Last Close", "RSI", "ADX", "3M Momentum %", "6M Momentum %", "1Y Momentum %", "From 52W High %", "ATR %", "Ann Vol %", "Sharpe", "Max Drawdown %", "Beta vs XU100", "VaR 95% %", "Avg Daily TL Volume", "Signal Drivers"]
         st.markdown("#### Capital Gain Leaders — Smart Ranking")
-        st.dataframe(style_smart_table(cap_df[[c for c in show_cols if c in cap_df.columns]].head(cap_top_n)), use_container_width=True, height=650)
+        st.dataframe(style_smart_table(cap_df[[c for c in show_cols if c in cap_df.columns]].head(cap_top_n)), width="stretch", height=650)
         c1, c2, c3 = st.columns(3)
         top = cap_df.iloc[0]
         c1.metric("Top Composite", f"{top['Name']} ({top['Symbol']})", f"{top['Composite Score']:.1f}")
         c2.metric("Best 3M Momentum", f"{cap_df.sort_values('3M Momentum %', ascending=False).iloc[0]['Symbol']}", f"{cap_df['3M Momentum %'].max():.1f}%")
         c3.metric("Highest Risk Vol", f"{cap_df.sort_values('Ann Vol %', ascending=False).iloc[0]['Symbol']}", f"{cap_df['Ann Vol %'].max():.1f}%")
-        st.plotly_chart(risk_return_bubble(cap_df, "Capital Gain Leaders — Risk / Return / Liquidity Map"), use_container_width=True, theme=None)
-        st.plotly_chart(momentum_bar(cap_df, "Capital Gain Leaders — Momentum Comparison", n=min(25, len(cap_df))), use_container_width=True, theme=None)
+        st.plotly_chart(risk_return_bubble(cap_df, "Capital Gain Leaders — Risk / Return / Liquidity Map"), width="stretch", theme=None)
+        st.plotly_chart(momentum_bar(cap_df, "Capital Gain Leaders — Momentum Comparison", n=min(25, len(cap_df))), width="stretch", theme=None)
         st.download_button("Download capital gain leaders CSV", cap_df.to_csv(index=False).encode("utf-8"), "bist_capital_gain_leaders_scan.csv", "text/csv")
     cap_excl = st.session_state.get("cap_excl", pd.DataFrame())
     if cap_excl is not None and not cap_excl.empty:
         with st.expander("Capital Gain Leaders — Exclusion Log"):
-            st.dataframe(cap_excl, use_container_width=True)
+            st.dataframe(cap_excl, width="stretch")
 
 # -------------------------------------------------------------------------
 # TAB 7: MINI PORTFOLIO LAB
@@ -1680,15 +1691,15 @@ with tab8:
             if portfolio["eq_index"] is not None:
                 fig.add_trace(go.Scatter(x=portfolio["eq_index"].index, y=portfolio["eq_index"], mode="lines", name="XU100"))
             fig.update_layout(title="Mini Portfolio Equity Curve vs XU100", yaxis_title="Normalized Equity")
-            st.plotly_chart(clean_fig(fig, height=560), use_container_width=True, theme=None)
+            st.plotly_chart(clean_fig(fig, height=560), width="stretch", theme=None)
 
             st.markdown("#### Portfolio vs Benchmark Metrics")
-            st.dataframe(style_smart_table(pd.DataFrame([pmet, imet])), use_container_width=True)
+            st.dataframe(style_smart_table(pd.DataFrame([pmet, imet])), width="stretch")
             st.markdown("#### Component Total Returns")
             comp = portfolio["asset_total_ret"].mul(100).sort_values(ascending=False).reset_index()
             comp.columns = ["Symbol", "Total Return %"]
-            st.dataframe(style_smart_table(comp), use_container_width=True)
-            st.plotly_chart(corr_heatmap(portfolio["corr"], "Portfolio Component Correlation Matrix"), use_container_width=True, theme=None)
+            st.dataframe(style_smart_table(comp), width="stretch")
+            st.plotly_chart(corr_heatmap(portfolio["corr"], "Portfolio Component Correlation Matrix"), width="stretch", theme=None)
 
 
 
@@ -1732,14 +1743,14 @@ with tab9:
         k3.metric("Confirmation Score",f"{latest_score:.0f}")
         k4.metric("Strategy CAGR",f"{lab_metrics.get('CAGR %',np.nan):.2f}%")
         k5.metric("Strategy MaxDD",f"{lab_metrics.get('Max Drawdown %',np.nan):.2f}%")
-        st.plotly_chart(leading_signal_chart(lab_df,f"{selected_asset_name} ({ticker_symbol}) — {signal_mode}"),use_container_width=True,theme=None)
+        st.plotly_chart(leading_signal_chart(lab_df,f"{selected_asset_name} ({ticker_symbol}) — {signal_mode}"),width="stretch",theme=None)
         st.markdown("#### Signal Strategy Performance")
         metric_order=['Total Return %','CAGR %','Ann Vol %','Sharpe','Sortino','Max Drawdown %','Win Rate %','Beta vs XU100','Information Ratio','Exposure %','Signal Count','Buy Signals','Sell Signals']
         metric_df=pd.DataFrame([{'Metric':m,'Value':lab_metrics.get(m,np.nan)} for m in metric_order])
-        st.dataframe(style_smart_table(metric_df),use_container_width=True,hide_index=True)
+        st.dataframe(style_smart_table(metric_df),width="stretch",hide_index=True)
         st.markdown("#### Latest Signal Decisions and Confirmations")
         lead_cols=['Close','SMA_Fast','SMA_Slow','EMA_Fast','EMA_Slow','RSI','MACD_HIST','Volume','Trend_Pass','Breakout_Pass','MACD_Pass','RSI_Pass','Volume_Pass','Market_Pass','Signal_Score','Signal_Event','Leading_Action','Position_Lab','Strategy_Return_Lab']
         lead_show=lab_df[[c for c in lead_cols if c in lab_df.columns]].tail(250).sort_index(ascending=False)
-        st.dataframe(style_smart_table(lead_show),use_container_width=True,height=620)
+        st.dataframe(style_smart_table(lead_show),width="stretch",height=620)
         st.download_button("Download Leading Signal Lab CSV",lab_df.to_csv(index=True).encode('utf-8'),file_name=f"{ticker_symbol.replace('.','_')}_leading_signal_lab.csv",mime='text/csv')
         st.caption("AL/SAT outputs are model signals, not guaranteed forecasts or investment advice. Their consistency must be judged through out-of-sample testing, turnover, drawdown and stability across parameter ranges.")
