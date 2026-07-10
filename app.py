@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # -------------------------------------------------------------------------
-# SUPERTRENDPRO INSTITUTIONAL V2 – NO SYNTHETIC DATA
+# SUPERTRENDPRO INSTITUTIONAL V3.3 – NO SYNTHETIC DATA
 # Trend Following + Smart Supertrend + Beta + Risk Metrics
 # Expanded BIST Blue-Chip Universe + Capital Gain Leaders Lab
 # -------------------------------------------------------------------------
-# Save as: SupertrendPro_INSTITUTIONAL_V2_NO_SYNTHETIC.py
+# Save as: app.py
 # Run:
-#   streamlit run SupertrendPro_INSTITUTIONAL_V2_NO_SYNTHETIC.py --server.port 8516
+#   streamlit run app.py --server.port 8516
 # -------------------------------------------------------------------------
 
 import warnings
@@ -294,33 +294,76 @@ def bbands(close: pd.Series, period: int = 20, ndev: float = 2.0):
 # -------------------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_data(symbol: str, start, end) -> Optional[pd.DataFrame]:
-    """Download OHLCV data from Yahoo Finance. Returns None if unavailable.
+    """Download real Yahoo Finance OHLCV and preserve raw and adjusted prices.
 
-    Data governance: no proxy, no interpolation, no synthetic fallback.
+    Governance rules
+    ----------------
+    * No proxy, interpolation, synthetic prices, or fallback series.
+    * Raw OHLC is retained for market-price display and liquidity calculations.
+    * Adjusted OHLC is used for indicators, returns, and backtests so stock splits
+      and cash distributions do not create artificial price jumps.
     """
     try:
         download_start = pd.to_datetime(start) - pd.DateOffset(years=2)
+        # yfinance's end date is exclusive; add one day so the selected end date
+        # can be included when it is a trading day.
+        download_end = pd.to_datetime(end) + pd.Timedelta(days=1)
         df = yf.download(
             symbol,
             start=download_start,
-            end=end,
-            auto_adjust=True,
+            end=download_end,
+            auto_adjust=False,
+            actions=True,
             progress=False,
             threads=False,
         )
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
         if df is None or df.empty:
             return None
-        required_cols = ["Open", "High", "Low", "Close", "Volume"]
-        if not all(c in df.columns for c in required_cols):
+
+        if isinstance(df.columns, pd.MultiIndex):
+            # yf.download may return either (field, ticker) or a one-ticker
+            # MultiIndex depending on yfinance version.
+            if symbol in df.columns.get_level_values(-1):
+                df = df.xs(symbol, axis=1, level=-1, drop_level=True)
+            else:
+                df.columns = df.columns.get_level_values(0)
+
+        required = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+        if not all(col in df.columns for col in required):
             return None
-        df = df[required_cols].copy()
-        df.index = pd.to_datetime(df.index).tz_localize(None) if getattr(df.index, "tz", None) is not None else pd.to_datetime(df.index)
+
+        optional_actions = [c for c in ["Dividends", "Stock Splits", "Capital Gains"] if c in df.columns]
+        df = df[required + optional_actions].copy()
+        df.index = pd.to_datetime(df.index)
+        if getattr(df.index, "tz", None) is not None:
+            df.index = df.index.tz_localize(None)
         df = df.loc[~df.index.duplicated(keep="last")].sort_index()
-        df = df.dropna(how="any")
-        df = df[(df["Close"] > 0) & (df["High"] >= df["Low"])]
-        return df if len(df) > 0 else None
+        df = df.replace([np.inf, -np.inf], np.nan)
+        df = df.dropna(subset=["Open", "High", "Low", "Close", "Adj Close", "Volume"])
+        df = df[(df["Close"] > 0) & (df["Adj Close"] > 0) & (df["High"] >= df["Low"])]
+        if df.empty:
+            return None
+
+        # Preserve the observed exchange prices exactly as downloaded.
+        df["Raw_Open"] = df["Open"].astype(float)
+        df["Raw_High"] = df["High"].astype(float)
+        df["Raw_Low"] = df["Low"].astype(float)
+        df["Raw_Close"] = df["Close"].astype(float)
+
+        # Build split/distribution-adjusted OHLC using Yahoo's adjustment factor.
+        adjustment_factor = (df["Adj Close"] / df["Raw_Close"]).replace([np.inf, -np.inf], np.nan)
+        adjustment_factor = adjustment_factor.ffill().bfill().fillna(1.0)
+        df["Adjustment_Factor"] = adjustment_factor
+        df["Open"] = df["Raw_Open"] * adjustment_factor
+        df["High"] = df["Raw_High"] * adjustment_factor
+        df["Low"] = df["Raw_Low"] * adjustment_factor
+        df["Close"] = df["Adj Close"].astype(float)
+        df["Analysis_Close"] = df["Close"]
+
+        # Explicit audit field: large deviations indicate a historical corporate
+        # action adjustment, not a fabricated observation.
+        df["Raw_Adjusted_Difference_Pct"] = (df["Close"] / df["Raw_Close"] - 1.0) * 100.0
+        return df
     except Exception:
         return None
 
@@ -362,7 +405,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     df["Return"] = df["Close"].pct_change()
     df["Log_Return"] = np.log(df["Close"] / df["Close"].shift(1))
-    df["Dollar_Volume"] = df["Close"] * df["Volume"]
+    df["Dollar_Volume"] = df["Raw_Close"] * df["Volume"]
     df["Vol_20D_Ann"] = df["Return"].rolling(20).std() * np.sqrt(TRADING_DAYS)
     df["Vol_63D_Ann"] = df["Return"].rolling(63).std() * np.sqrt(TRADING_DAYS)
     df["Momentum_20D"] = df["Close"].pct_change(20)
@@ -874,7 +917,8 @@ def analyze_symbol(symbol: str, name: str, start_date, end_date, index_returns: 
     row = {
         "Name": name,
         "Symbol": symbol,
-        "Last Close": last["Close"],
+        "Last Close": last.get("Raw_Close", last["Close"]),
+        "Adjusted Close": last["Close"],
         "RSI": last["RSI"],
         "ADX": last["ADX"],
         "ATR %": last["ATR_Pct"] * 100,
@@ -1004,7 +1048,7 @@ def strategy_chart(p: pd.DataFrame, title: str):
         row_heights=[0.42, 0.16, 0.14, 0.14, 0.14],
         subplot_titles=(title, "MACD", "RSI", "ATR %", "Strategy Drawdown"),
     )
-    fig.add_trace(go.Scatter(x=p.index, y=p["Close"], mode="lines", name="Adjusted Close", line=dict(width=1.7)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=p.index, y=p["Close"], mode="lines", name="Adjusted Close (Analysis)", line=dict(width=1.7)), row=1, col=1)
     for col, name, dash in [("EMA_50", "EMA 50", "dot"), ("EMA_200", "EMA 200", "solid"), ("BB_UPPER", "BB Upper", "dash"), ("BB_LOWER", "BB Lower", "dash")]:
         if col in p.columns:
             fig.add_trace(go.Scatter(x=p.index, y=p[col], mode="lines", name=name, line=dict(width=1.0, dash=dash)), row=1, col=1)
@@ -1139,7 +1183,7 @@ else:
 # -------------------------------------------------------------------------
 # MAIN DATA LOAD
 # -------------------------------------------------------------------------
-st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V3.2</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V3.3</h1>", unsafe_allow_html=True)
 st.caption("Trend Analysis • Strategy Backtesting • Risk Analytics • BIST Screening • Portfolio Lab")
 st.caption("MK FinTECH LabGEN @2026 Istanbul | Real Yahoo Finance Daily OHLCV | No Synthetic Data | Net-of-Cost Backtests | Not Investment Advice")
 
@@ -1202,11 +1246,11 @@ trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
 st.markdown(f"<h2 class='mk-section-title'>Selected Instrument: {selected_asset_name} ({ticker_symbol})</h2>", unsafe_allow_html=True)
-st.caption("Institutional V3.2 | Strategy Diagnostics Enabled | No Synthetic Data")
+st.caption("Institutional V3.3 | Strategy Diagnostics Enabled | No Synthetic Data")
 
 # Top KPIs
 k1, k2, k3, k4, k5, k6 = st.columns(6)
-k1.metric("Last Price", f"₺{last['Close']:.2f}")
+k1.metric("Last Raw Market Price", f"₺{last.get('Raw_Close', last['Close']):.2f}")
 k2.metric("RSI", f"{last['RSI']:.1f}")
 k3.metric("Trend vs EMA200", trend_state)
 k4.metric("Strategy Return", f"{stats.get('strat_total_pct', np.nan):.1f}%")
@@ -1237,8 +1281,9 @@ with tab1:
 # TAB 2
 # -------------------------------------------------------------------------
 with tab2:
-    st.subheader("Smart Market Data — OHLCV, Signals, Filters, Risk and Rolling Beta")
-    cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Filter_Trend_Pass", "Filter_EMA200_Pass", "Filter_ADX_Pass", "Filter_Market_Pass", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Gross_Strategy_Return", "Trading_Cost", "Turnover", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
+    st.subheader("Smart Market Data — Raw Market Prices, Adjusted Analysis Prices, Signals and Risk")
+    st.caption("Raw OHLC is shown for market-price validation; adjusted OHLC is used for indicators and backtests. No synthetic data is generated.")
+    cols = ["Raw_Open", "Raw_High", "Raw_Low", "Raw_Close", "Open", "High", "Low", "Close", "Adjustment_Factor", "Raw_Adjusted_Difference_Pct", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Filter_Trend_Pass", "Filter_EMA200_Pass", "Filter_ADX_Pass", "Filter_Market_Pass", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Gross_Strategy_Return", "Trading_Cost", "Turnover", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
     show = plot_data[[c for c in cols if c in plot_data.columns]].sort_index(ascending=False).copy()
     st.dataframe(style_smart_table(show.head(800)), use_container_width=True, height=620)
     csv = show.to_csv(index=True).encode("utf-8")
@@ -1253,7 +1298,7 @@ with tab2:
 with tab3:
     st.subheader("Technical Indicator Dashboard — Candlestick, Bollinger Bands, Supertrend, MACD and RSI")
     ts = plot_data.copy()
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.58, 0.22, 0.20], subplot_titles=("Candlestick + Bollinger + EMA + Supertrend", "MACD", "RSI"))
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.58, 0.22, 0.20], subplot_titles=("Adjusted Candlestick + Bollinger + EMA + Supertrend", "MACD", "RSI"))
     fig.add_trace(go.Candlestick(x=ts.index, open=ts["Open"], high=ts["High"], low=ts["Low"], close=ts["Close"], name="OHLC"), row=1, col=1)
     for c, n, dash in [("BB_UPPER", "BB Upper", "dash"), ("BB_MID", "BB Mid", "dot"), ("BB_LOWER", "BB Lower", "dash"), ("EMA_50", "EMA50", "dot"), ("EMA_200", "EMA200", "solid"), ("ST_Line", "Supertrend", "solid")]:
         if c in ts.columns:
@@ -1564,4 +1609,4 @@ with tab8:
 # FOOTER
 # -------------------------------------------------------------------------
 st.markdown("---")
-st.caption("SupertrendPro Institutional V3.2 • MK FinTECH LabGEN @2026 Istanbul • No Synthetic Data • Not Investment Advice")
+st.caption("SupertrendPro Institutional V3.3 • MK FinTECH LabGEN @2026 Istanbul • No Synthetic Data • Not Investment Advice")
