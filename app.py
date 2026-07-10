@@ -66,13 +66,291 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-      .block-container {padding-top: 1.0rem; padding-bottom: 2rem;}
-      div[data-testid="stMetricValue"] {font-size: 1.35rem;}
-      div[data-testid="stMetricLabel"] {font-size: .88rem; color: #475467;}
-      .small-note {font-size: 0.86rem; color:#667085;}
-      .risk-note {background:#fff7ed; border:1px solid #fed7aa; padding:12px 14px; border-radius:12px; color:#7c2d12;}
-      .ok-note {background:#ecfdf3; border:1px solid #abefc6; padding:12px 14px; border-radius:12px; color:#054f31;}
-      .mk-title {font-weight: 700; letter-spacing: -0.02em;}
+      :root {
+        --hf-navy: #0b1f33;
+        --hf-slate: #344054;
+        --hf-muted: #667085;
+        --hf-border: #dfe3e8;
+        --hf-soft: #f6f8fa;
+        --hf-white: #ffffff;
+        --hf-accent: #214b73;
+      }
+
+      html, body, [class*="css"] {
+        font-family: "Inter", "Aptos", "Segoe UI", Arial, sans-serif;
+        color: var(--hf-navy);
+      }
+
+      .stApp {
+        background: var(--hf-white);
+      }
+
+      .block-container {
+        max-width: 1680px;
+        padding-top: 1.15rem;
+        padding-bottom: 2.5rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
+      }
+
+      h1, h2, h3, h4, h5, h6 {
+        font-family: "Inter", "Aptos", "Segoe UI", Arial, sans-serif;
+        color: var(--hf-navy);
+        letter-spacing: -0.025em;
+      }
+
+      h1 {
+        font-size: 2.00rem !important;
+        line-height: 1.18 !important;
+        font-weight: 300 !important;
+        margin-bottom: 0.35rem !important;
+      }
+
+      h2 {
+        font-size: 1.45rem !important;
+        line-height: 1.25 !important;
+        font-weight: 350 !important;
+        margin-top: 1.55rem !important;
+        margin-bottom: 0.55rem !important;
+      }
+
+      h3 {
+        font-size: 1.10rem !important;
+        line-height: 1.30 !important;
+        font-weight: 450 !important;
+        margin-top: 1.30rem !important;
+        margin-bottom: 0.45rem !important;
+      }
+
+      h4 {
+        font-size: 0.95rem !important;
+        font-weight: 500 !important;
+        letter-spacing: 0.01em !important;
+      }
+
+      p, label, .stMarkdown, .stCaption {
+        color: var(--hf-slate);
+      }
+
+      hr {
+        border: 0;
+        border-top: 1px solid var(--hf-border);
+        margin: 1.25rem 0 1.35rem 0;
+      }
+
+      .hf-masthead {
+        margin: 0.15rem 0 1.10rem 0;
+        padding: 0.15rem 0 1.05rem 0;
+        border-bottom: 1px solid var(--hf-border);
+      }
+
+      .hf-eyebrow {
+        font-size: 0.68rem;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--hf-muted);
+        margin-bottom: 0.48rem;
+      }
+
+      .hf-brand-row {
+        display: flex;
+        align-items: baseline;
+        gap: 0.70rem;
+        flex-wrap: wrap;
+      }
+
+      .hf-title {
+        font-size: 2.05rem;
+        line-height: 1.12;
+        font-weight: 300;
+        letter-spacing: -0.045em;
+        color: var(--hf-navy);
+      }
+
+      .hf-version {
+        font-size: 0.72rem;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        color: var(--hf-accent);
+        text-transform: uppercase;
+      }
+
+      .hf-meta {
+        margin-top: 0.48rem;
+        font-size: 0.78rem;
+        font-weight: 400;
+        letter-spacing: 0.045em;
+        color: var(--hf-muted);
+      }
+
+      .instrument-header {
+        margin: 1.25rem 0 0.85rem 0;
+        padding: 0 0 0.85rem 0;
+        border-bottom: 1px solid var(--hf-border);
+      }
+
+      .instrument-kicker {
+        font-size: 0.64rem;
+        line-height: 1;
+        font-weight: 600;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--hf-muted);
+        margin-bottom: 0.42rem;
+      }
+
+      .instrument-title {
+        font-size: 1.65rem;
+        line-height: 1.20;
+        font-weight: 350;
+        letter-spacing: -0.035em;
+        color: var(--hf-navy);
+      }
+
+      .instrument-title span {
+        font-size: 0.82rem;
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        color: var(--hf-accent);
+        margin-left: 0.35rem;
+      }
+
+      .instrument-subtitle {
+        margin-top: 0.32rem;
+        font-size: 0.76rem;
+        font-weight: 400;
+        color: var(--hf-muted);
+        letter-spacing: 0.025em;
+      }
+
+      div[data-testid="stMetric"] {
+        background: var(--hf-white);
+        border: 1px solid var(--hf-border);
+        border-radius: 4px;
+        padding: 0.72rem 0.82rem 0.66rem 0.82rem;
+        box-shadow: none;
+      }
+
+      div[data-testid="stMetricLabel"] {
+        font-size: 0.66rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.075em !important;
+        text-transform: uppercase;
+        color: var(--hf-muted) !important;
+      }
+
+      div[data-testid="stMetricValue"] {
+        font-size: 1.30rem !important;
+        line-height: 1.12 !important;
+        font-weight: 400 !important;
+        color: var(--hf-navy) !important;
+      }
+
+      div[data-testid="stMetricDelta"] {
+        font-size: 0.72rem !important;
+        font-weight: 500 !important;
+      }
+
+      div[data-testid="stTabs"] button {
+        min-height: 2.55rem;
+        padding: 0.30rem 0.72rem;
+        border-radius: 0;
+      }
+
+      div[data-testid="stTabs"] button p {
+        font-size: 0.68rem !important;
+        font-weight: 550 !important;
+        letter-spacing: 0.055em !important;
+        text-transform: uppercase;
+        color: var(--hf-muted) !important;
+      }
+
+      div[data-testid="stTabs"] button[aria-selected="true"] {
+        border-bottom: 2px solid var(--hf-navy) !important;
+      }
+
+      div[data-testid="stTabs"] button[aria-selected="true"] p {
+        color: var(--hf-navy) !important;
+      }
+
+      section[data-testid="stSidebar"] {
+        background: #f8fafc;
+        border-right: 1px solid var(--hf-border);
+      }
+
+      section[data-testid="stSidebar"] h1,
+      section[data-testid="stSidebar"] h2,
+      section[data-testid="stSidebar"] h3 {
+        font-weight: 400 !important;
+      }
+
+      section[data-testid="stSidebar"] label,
+      section[data-testid="stSidebar"] p {
+        font-size: 0.78rem;
+      }
+
+      .small-note {
+        font-size: 0.76rem;
+        line-height: 1.55;
+        color: var(--hf-muted);
+      }
+
+      .risk-note,
+      .ok-note {
+        padding: 0.78rem 0.92rem;
+        border-radius: 3px;
+        font-size: 0.78rem;
+        line-height: 1.50;
+      }
+
+      .risk-note {
+        background: #fffaf3;
+        border: 1px solid #eadbc8;
+        color: #6b4f33;
+      }
+
+      .ok-note {
+        background: #f4f8f6;
+        border: 1px solid #cfddd5;
+        color: #315244;
+      }
+
+      .stButton > button,
+      .stDownloadButton > button {
+        border-radius: 3px;
+        border: 1px solid #cfd6de;
+        background: #ffffff;
+        color: var(--hf-navy);
+        font-size: 0.72rem;
+        font-weight: 550;
+        letter-spacing: 0.045em;
+        text-transform: uppercase;
+        box-shadow: none;
+      }
+
+      .stButton > button:hover,
+      .stDownloadButton > button:hover {
+        border-color: var(--hf-accent);
+        color: var(--hf-accent);
+      }
+
+      div[data-testid="stDataFrame"] {
+        border: 1px solid var(--hf-border);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+
+      div[data-testid="stAlert"] {
+        border-radius: 3px;
+        border-width: 1px;
+      }
+
+      .stCaptionContainer,
+      [data-testid="stCaptionContainer"] {
+        font-size: 0.72rem !important;
+        color: var(--hf-muted) !important;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1657,8 +1935,8 @@ def institutional_score_chart(score_df: pd.DataFrame) -> go.Figure:
 # -------------------------------------------------------------------------
 # SIDEBAR
 # -------------------------------------------------------------------------
-st.sidebar.title("📊 SupertrendPro Institutional V5.0.2")
-st.sidebar.caption("Real Yahoo Finance daily data only. No synthetic price series, no proxy fallback.")
+st.sidebar.title("SupertrendPro Institutional")
+st.sidebar.caption("Version 5.0.2 · Real Yahoo Finance daily data · No synthetic price series")
 
 selected_category = st.sidebar.selectbox("Select Sector / Category:", list(MARKET_DATA.keys()), index=2)
 ticker_options = MARKET_DATA[selected_category]
@@ -1731,8 +2009,20 @@ else:
 # -------------------------------------------------------------------------
 # MAIN DATA LOAD
 # -------------------------------------------------------------------------
-st.markdown("<h1 class='mk-title'>SupertrendPro Institutional V5.0.2 — Trend, Risk, Diagnostics & Leading Signal Engine</h1>", unsafe_allow_html=True)
-st.caption("MK FinTECH LabGEN @2026 Istanbul | No synthetic data | Yahoo Finance daily OHLCV | Net-of-cost backtests | Educational analytics, not investment advice")
+st.markdown(
+    """
+    <div class="hf-masthead">
+      <div class="hf-eyebrow">MK FinTECH LabGEN · Institutional Analytics</div>
+      <div class="hf-brand-row">
+        <div class="hf-title">SupertrendPro Institutional</div>
+        <div class="hf-version">Version 5.0.2</div>
+      </div>
+      <div class="hf-meta">Trend · Risk · Diagnostics · Leading Signal Engine · No Synthetic Data</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.caption("Yahoo Finance daily OHLCV · Net-of-cost backtests · Educational analytics, not investment advice")
 
 engine_col1, engine_col2, engine_col3 = st.columns(3)
 engine_col1.metric("Market Data Engine", "Yahoo Finance")
@@ -1810,9 +2100,17 @@ last = plot_data.iloc[-1]
 trend_state = "BULLISH" if last["Close"] > last["EMA_200"] else "BEARISH"
 tech_score, tech_reasons = technical_grade(last)
 
-st.title(f"📈 {selected_asset_name} ({ticker_symbol}) — SupertrendPro Institutional V5.0.2")
-st.caption("Institutional V5.0.2 — Strategy Diagnostics + Leading AL/SAT Signal Lab — No Synthetic Data")
-st.caption("Cloud-stable build: Arrow-safe tables, modern Streamlit width API, TA-Lib disabled by default.")
+st.markdown(
+    f"""
+    <div class="instrument-header">
+      <div class="instrument-kicker">Selected Instrument</div>
+      <div class="instrument-title">{selected_asset_name}<span>{ticker_symbol}</span></div>
+      <div class="instrument-subtitle">Institutional technical, risk, backtest and decision analytics</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.caption("Version 5.0.2 · Strategy diagnostics · Leading signal lab · Cloud-stable deployment")
 
 # Top KPIs
 k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -1826,16 +2124,16 @@ k6.metric("Technical Score", f"{tech_score:.0f}/100")
 st.markdown("---")
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
-    "📊 Strategy Chart",
-    "📋 Smart Data Table",
-    "📈 Technical Signals",
-    "📊 Backtest & Risk",
-    "🔎 Strategy Diagnostics",
-    "🏦 Blue-Chip Universe Screener",
-    "🚀 Capital Gain Leaders Lab",
-    "🧮 Mini Portfolio Lab",
-    "🚦 Leading AL/SAT Signal Lab",
-    "🧠 Institutional Decision Engine",
+    "Strategy & Signal",
+    "Market Data",
+    "Technical Analytics",
+    "Backtest & Risk",
+    "Strategy Diagnostics",
+    "Blue-Chip Screener",
+    "Capital Gain Leaders",
+    "Portfolio Lab",
+    "Leading Signal Lab",
+    "Institutional Decision Engine",
 ])
 
 # -------------------------------------------------------------------------
@@ -1849,7 +2147,7 @@ with tab1:
 # TAB 2
 # -------------------------------------------------------------------------
 with tab2:
-    st.subheader("Smart Data Table — OHLCV, Signals, Risk & Rolling Beta")
+    st.subheader("Market Data — OHLCV, Signals, Risk & Rolling Beta")
     cols = ["Open", "High", "Low", "Close", "Volume", "RSI", "EMA_50", "EMA_200", "MACD", "MACD_SIGNAL", "ATR_Pct", "ADX", "ST_Dir", "Filter_Trend_Pass", "Filter_EMA200_Pass", "Filter_ADX_Pass", "Filter_Market_Pass", "Entry_Eligible", "Exit_Rule", "Signal", "Position", "ATR_Stop", "Return", "Gross_Strategy_Return", "Trading_Cost", "Turnover", "Strategy_Return", "Rolling_Beta_Asset", "Rolling_Beta_Strategy", "Drawdown"]
     show = plot_data[[c for c in cols if c in plot_data.columns]].sort_index(ascending=False).copy()
     st.dataframe(style_smart_table(show.head(800)), width="stretch", height=620)
@@ -1863,7 +2161,7 @@ with tab2:
 # TAB 3
 # -------------------------------------------------------------------------
 with tab3:
-    st.subheader("Technical Signals — Candlestick, Bollinger Bands, Supertrend, RSI/MACD")
+    st.subheader("Technical Analytics — Candlestick, Bollinger Bands, Supertrend, RSI and MACD")
     ts = plot_data.copy()
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.58, 0.22, 0.20], subplot_titles=("Candlestick + Bollinger + EMA + Supertrend", "MACD", "RSI"))
     fig.add_trace(go.Candlestick(x=ts.index, open=ts["Open"], high=ts["High"], low=ts["Low"], close=ts["Close"], name="OHLC"), row=1, col=1)
@@ -1882,7 +2180,7 @@ with tab3:
 # TAB 4
 # -------------------------------------------------------------------------
 with tab4:
-    st.subheader("Backtest, Beta & Institutional Risk Metrics")
+    st.subheader("Backtest, Beta and Institutional Risk Metrics")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Strategy CAGR", f"{stats.get('strat_annual_pct', np.nan):.2f}%")
     c2.metric("Sharpe / Sortino", f"{stats.get('sharpe', np.nan):.2f} / {stats.get('sortino', np.nan):.2f}")
@@ -1953,7 +2251,7 @@ with tab4:
 # TAB 5: STRATEGY DIAGNOSTICS
 # -------------------------------------------------------------------------
 with tab5:
-    st.subheader("Strategy Diagnostics — Filter-by-Filter Constraint Analysis")
+    st.subheader("Strategy Diagnostics — Filter Constraint Analysis")
     st.caption("Every row is calculated from real Yahoo Finance observations. Disabled filters are treated as PASS and are clearly labelled below.")
 
     diagnostic_columns = [
@@ -2030,7 +2328,7 @@ with tab5:
 # TAB 5: BLUE-CHIP UNIVERSE SCREENER
 # -------------------------------------------------------------------------
 with tab6:
-    st.subheader("Expanded BIST Blue-Chip Universe Screener")
+    st.subheader("BIST Blue-Chip Universe Screener")
     st.markdown("<div class='small-note'>Universe includes banks, QNB, Garanti, YKBNK, Koç Holding, Sabancı Holding, Pegasus, industrials, telecom, consumer and energy names. Calculations use real Yahoo daily data only.</div>", unsafe_allow_html=True)
     col_a, col_b, col_c = st.columns(3)
     min_obs_scan = col_a.slider("Minimum valid observations", 60, 756, 180, 30, key="blue_min_obs")
@@ -2066,7 +2364,7 @@ with tab6:
 # TAB 6: CAPITAL GAIN LEADERS LAB
 # -------------------------------------------------------------------------
 with tab7:
-    st.subheader("Capital Gain Leaders Lab — Separate High-Momentum Basket")
+    st.subheader("Capital Gain Leaders — High-Momentum Basket")
     st.markdown("<div class='risk-note'><b>No synthetic data rule:</b> the snapshot gain table is only a user-provided watchlist/metadata layer. All prices, returns, beta, volatility and signals below are recalculated from real Yahoo Finance OHLCV. If Yahoo data is missing, the stock is excluded and logged.</div>", unsafe_allow_html=True)
     cap_meta = pd.DataFrame(CAPITAL_GAIN_LEADERS)
     st.markdown("#### User-Provided Snapshot Watchlist")
@@ -2112,7 +2410,7 @@ with tab7:
 # TAB 7: MINI PORTFOLIO LAB
 # -------------------------------------------------------------------------
 with tab8:
-    st.subheader("Mini Equal-Weight Portfolio Lab vs XU100")
+    st.subheader("Equal-Weight Portfolio Lab vs XU100")
     source_choice = st.radio("Choose selection source", ["Manual Universe", "Top Blue-Chip Scan", "Top Capital Gain Leaders"], horizontal=True)
     if source_choice == "Manual Universe":
         all_names = list(UNIVERSE_STOCKS.keys())
@@ -2177,7 +2475,7 @@ with tab8:
 # TAB 9: LEADING AL/SAT SIGNAL LAB
 # -------------------------------------------------------------------------
 with tab9:
-    st.subheader("Leading AL/SAT Signal Lab — Vectorised Backtest Without Zipline")
+    st.subheader("Leading Signal Lab — Vectorised Backtest Without Zipline")
     st.markdown(
         "<div class='ok-note'><b>Methodology:</b> The classic mode reproduces the transparent moving-average crossover approach used as a practical alternative to Zipline. The advanced mode adds trend, prior-high breakout, MACD acceleration, RSI regime, volume and optional XU100 regime confirmation. All decisions are generated at the close and applied from the next trading bar, preventing look-ahead bias.</div>",
         unsafe_allow_html=True,
