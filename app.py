@@ -1369,16 +1369,67 @@ def corr_heatmap(corr: pd.DataFrame, title: str):
     return clean_fig(fig, height=650)
 
 
+def _institutional_css_gradient(series: pd.Series) -> list[str]:
+    """Matplotlib-free institutional red/neutral/green table gradient.
+
+    The pandas gradient helper imports matplotlib at render time.
+    Streamlit Cloud may not include that optional dependency, so this helper
+    produces the same visual hierarchy with plain CSS only.
+    """
+    numeric = pd.to_numeric(series, errors="coerce")
+    finite = numeric.replace([np.inf, -np.inf], np.nan).dropna()
+    if finite.empty:
+        return ["" for _ in series]
+
+    lo = float(finite.min())
+    hi = float(finite.max())
+    span = hi - lo
+    if not np.isfinite(span) or span <= 1e-12:
+        return [
+            "background-color: rgba(226,232,240,0.45); color: #0f172a;"
+            if pd.notna(value) else ""
+            for value in numeric
+        ]
+
+    styles: list[str] = []
+    for value in numeric:
+        if pd.isna(value):
+            styles.append("")
+            continue
+        z = float(np.clip((value - lo) / span, 0.0, 1.0))
+        if z < 0.5:
+            weight = z / 0.5
+            red = round(254 * (1 - weight) + 241 * weight)
+            green = round(226 * (1 - weight) + 245 * weight)
+            blue = round(226 * (1 - weight) + 249 * weight)
+        else:
+            weight = (z - 0.5) / 0.5
+            red = round(241 * (1 - weight) + 220 * weight)
+            green = round(245 * (1 - weight) + 252 * weight)
+            blue = round(249 * (1 - weight) + 231 * weight)
+        styles.append(
+            f"background-color: rgb({red},{green},{blue}); color: #0f172a; "
+            "font-weight: 500;"
+        )
+    return styles
+
+
 def style_smart_table(df: pd.DataFrame):
+    """Format institutional tables without requiring matplotlib."""
     fmt_cols = {c: "{:.2f}" for c in df.select_dtypes(include=[np.number]).columns}
     pct_cols = [c for c in df.columns if "%" in c or c in ["ATR %", "From 52W High %", "From 52W Low %"]]
     for c in pct_cols:
         if c in fmt_cols:
             fmt_cols[c] = "{:.2f}%"
+
     sty = df.style.format(fmt_cols, na_rep="N/A")
-    for c in ["Composite Score", "Technical Score", "Sharpe", "Sortino", "CAGR %", "3M Momentum %", "6M Momentum %"]:
-        if c in df.columns:
-            sty = sty.background_gradient(subset=[c])
+    gradient_columns = [
+        "Composite Score", "Technical Score", "Sharpe", "Sortino",
+        "CAGR %", "3M Momentum %", "6M Momentum %",
+    ]
+    for column in gradient_columns:
+        if column in df.columns:
+            sty = sty.apply(_institutional_css_gradient, subset=[column], axis=0)
     return sty
 
 
